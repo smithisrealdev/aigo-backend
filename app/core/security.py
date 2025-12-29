@@ -1,39 +1,62 @@
-"""Security utilities for authentication and authorization."""
+"""Security utilities for authentication and authorization.
 
-from datetime import datetime, timedelta, timezone
-from typing import Any
+This module provides backward-compatible password utilities.
+For JWT token operations, use app.core.auth instead.
+"""
 
-from jose import jwt
-from passlib.context import CryptContext
+from datetime import timedelta
 
-from app.core.config import settings
+from app.core.auth import (
+    TokenPair,
+    TokenPayload,
+    TokenService,
+    create_access_token as _create_access_token,
+    create_refresh_token,
+    create_token_pair,
+    decode_access_token,
+    decode_refresh_token,
+    token_service,
+)
+from app.domains.user.security import (
+    PasswordHasher,
+    hash_password,
+    verify_password,
+)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
+# Re-export for backward compatibility
+pwd_context = PasswordHasher
 ALGORITHM = "HS256"
 
 
 def create_access_token(
-    subject: str | Any,
+    subject: str,
     expires_delta: timedelta | None = None,
 ) -> str:
-    """Create a JWT access token."""
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(
-            minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
-        )
-    to_encode = {"exp": expire, "sub": str(subject)}
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
-    return encoded_jwt
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Create a JWT access token.
+    
+    Backward-compatible wrapper around auth.create_access_token.
+    """
+    return _create_access_token(subject, expires_delta)
 
 
 def get_password_hash(password: str) -> str:
-    """Hash a password."""
-    return pwd_context.hash(password)
+    """Hash a password using bcrypt."""
+    return hash_password(password)
+
+
+__all__ = [
+    "ALGORITHM",
+    "PasswordHasher",
+    "TokenPair",
+    "TokenPayload",
+    "TokenService",
+    "create_access_token",
+    "create_refresh_token",
+    "create_token_pair",
+    "decode_access_token",
+    "decode_refresh_token",
+    "get_password_hash",
+    "hash_password",
+    "token_service",
+    "verify_password",
+]

@@ -1,6 +1,7 @@
 """Infrastructure module - Database, Cache, Celery, and external integrations."""
 
-from app.infra.celery_app import celery_app
+# Note: celery_app is imported lazily to avoid circular imports
+# Use: from app.infra.celery_app import celery_app
 from app.infra.database import Base, get_db, get_db_transaction, init_db, close_db
 from app.infra.redis import (
     get_redis,
@@ -18,8 +19,6 @@ from app.infra.task_progress import (
 )
 
 __all__ = [
-    # Celery
-    "celery_app",
     # Database
     "Base",
     "get_db",

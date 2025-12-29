@@ -185,6 +185,45 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "json"
 
+    # ============ OAuth Settings ============
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = Field(
+        default="",
+        description="Google OAuth Client ID",
+    )
+    GOOGLE_CLIENT_SECRET: str = Field(
+        default="",
+        description="Google OAuth Client Secret",
+    )
+
+    # Facebook OAuth
+    FACEBOOK_APP_ID: str = Field(
+        default="",
+        description="Facebook App ID",
+    )
+    FACEBOOK_APP_SECRET: str = Field(
+        default="",
+        description="Facebook App Secret",
+    )
+
+    # Apple OAuth
+    APPLE_CLIENT_ID: str = Field(
+        default="",
+        description="Apple Client ID (Service ID)",
+    )
+    APPLE_TEAM_ID: str = Field(
+        default="",
+        description="Apple Team ID",
+    )
+    APPLE_KEY_ID: str = Field(
+        default="",
+        description="Apple Key ID",
+    )
+    APPLE_PRIVATE_KEY: str = Field(
+        default="",
+        description="Apple Private Key (PEM format)",
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:
