@@ -1,0 +1,1 @@
+Always use async/await, follow PEP 8, and use DDD patterns for all backend tasks

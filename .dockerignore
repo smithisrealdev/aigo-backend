@@ -1,0 +1,137 @@
+# ===========================================
+# AiGo Backend - Docker Ignore File
+# ===========================================
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.python-version
+
+# Poetry
+poetry.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Documentation
+docs/_build/
+*.md
+!README.md
+
+# Logs
+*.log
+logs/
+
+# Local development
+.env.local
+.env.*.local
+*.local
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Docker (don't include compose files in image)
+docker-compose*.yaml
+docker-compose*.yml
+Dockerfile*
+.docker/
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+azure-pipelines.yml
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+
+# Notebooks
+*.ipynb
+.ipynb_checkpoints/
+
+# Data files (if any)
+data/
+*.csv
+*.json
+!pyproject.toml
+*.xlsx
+*.xls
+
+# Alembic migrations (include in production)
+# alembic/versions/*.py
+
+# Test files (exclude from production)
+tests/
+conftest.py
+pytest.ini
+setup.cfg
+
+# Scripts (development only)
+scripts/
+Makefile
+
+# Nginx config (mounted separately)
+nginx/

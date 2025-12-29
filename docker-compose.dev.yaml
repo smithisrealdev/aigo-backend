@@ -1,0 +1,75 @@
+# AiGo Backend - Development Override
+# Usage: docker-compose -f docker-compose.yaml -f docker-compose.dev.yaml up -d
+
+version: "3.9"
+
+services:
+  api:
+    build:
+      target: development
+    environment:
+      DEBUG: "true"
+      LOG_LEVEL: DEBUG
+      ENVIRONMENT: development
+      # Enable SQL query logging
+      SQLALCHEMY_ECHO: "true"
+    volumes:
+      - ./app:/app/app:cached
+      - ./tests:/app/tests:cached
+      - ./alembic:/app/alembic:cached
+      - ./.env:/app/.env:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
+
+  # pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: aigo-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@aigo.local
+      PGADMIN_DEFAULT_PASSWORD: admin123
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    networks:
+      - aigo-network
+    profiles:
+      - tools
+
+  # Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: aigo-redis-commander
+    restart: unless-stopped
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    networks:
+      - aigo-network
+    profiles:
+      - tools
+
+  # MailHog for email testing
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: aigo-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - aigo-network
+    profiles:
+      - tools
+
+volumes:
+  pgadmin_data:
+    name: aigo-pgadmin-data
