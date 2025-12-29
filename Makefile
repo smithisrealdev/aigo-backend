@@ -59,11 +59,29 @@ update: ## Update dependencies
 	$(POETRY) update
 	@echo "$(GREEN)✅ Dependencies updated$(RESET)"
 
+##@ Quick Start (Recommended)
+
+quick-start: ## 🚀 Quick start everything (setup + run) - ONE COMMAND!
+	@chmod +x scripts/quick-start.sh
+	@./scripts/quick-start.sh
+
+docker-quick-start: ## 🐳 Quick start with Docker
+	@chmod +x scripts/docker-quick-start.sh
+	@./scripts/docker-quick-start.sh
+
+db-setup: ## 🗄️ Setup PostgreSQL database and user
+	@chmod +x scripts/setup-db.sh
+	@./scripts/setup-db.sh
+
 ##@ Running Application
 
 dev: ## Run development server with hot reload
 	@echo "$(CYAN)Starting development server...$(RESET)"
 	$(POETRY) run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+start-celery: ## 🔄 Start Celery worker (run in separate terminal)
+	@chmod +x scripts/start-celery.sh
+	@./scripts/start-celery.sh
 
 run: ## Run production server locally
 	@echo "$(CYAN)Starting production server...$(RESET)"
@@ -121,6 +139,17 @@ migrate-reset: ## Reset all migrations
 	@echo "$(RED)⚠️  Resetting all migrations...$(RESET)"
 	$(POETRY) run alembic downgrade base
 	@echo "$(GREEN)✅ Migrations reset$(RESET)"
+
+db-reset: ## 🔄 Drop and recreate database (WARNING: destroys all data!)
+	@echo "$(RED)⚠️  WARNING: This will delete all data!$(RESET)"
+	@read -p "Are you sure? [y/N] " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		dropdb -U postgres aigo_db --if-exists; \
+		createdb -U postgres aigo_db; \
+		$(POETRY) run alembic upgrade head; \
+		echo "$(GREEN)✅ Database reset complete!$(RESET)"; \
+	fi
 
 ##@ Docker Development
 
@@ -216,12 +245,38 @@ clean: ## Clean cache and build files
 	find . -type f -name ".coverage" -delete 2>/dev/null || true
 	@echo "$(GREEN)✅ Cache cleaned$(RESET)"
 
+stop-services: ## 🛑 Stop PostgreSQL and Redis
+	@echo "$(YELLOW)Stopping services...$(RESET)"
+	@brew services stop postgresql@16 2>/dev/null || true
+	@brew services stop redis 2>/dev/null || true
+	@echo "$(GREEN)✅ Services stopped$(RESET)"
+
+start-services: ## ▶️  Start PostgreSQL and Redis
+	@echo "$(YELLOW)Starting services...$(RESET)"
+	@brew services start postgresql@16
+	@brew services start redis
+	@echo "$(GREEN)✅ Services started$(RESET)"
+
+check-services: ## 🔍 Check if PostgreSQL and Redis are running
+	@echo "$(CYAN)Checking services...$(RESET)"
+	@pg_isready -h localhost -p 5432 && echo "$(GREEN)✅ PostgreSQL is running$(RESET)" || echo "$(RED)❌ PostgreSQL is not running$(RESET)"
+	@redis-cli ping >/dev/null 2>&1 && echo "$(GREEN)✅ Redis is running$(RESET)" || echo "$(RED)❌ Redis is not running$(RESET)"
+
+test-api: ## 🧪 Test if API is running and responsive
+	@echo "$(CYAN)Testing API...$(RESET)"
+	@curl -s http://localhost:8000/health | jq . || echo "$(RED)❌ API not running$(RESET)"
+
+logs: ## 📋 Show application logs
+	@tail -f logs/aigo.log 2>/dev/null || echo "$(YELLOW)No logs yet. Start the server to generate logs.$(RESET)"
+
 env-check: ## Check environment setup
 	@echo "$(CYAN)Checking environment...$(RESET)"
 	@echo "Python: $$($(PYTHON) --version)"
 	@echo "Poetry: $$($(POETRY) --version)"
-	@echo "Docker: $$(docker --version)"
-	@echo "Docker Compose: $$(docker-compose --version)"
+	@echo "Docker: $$(docker --version 2>/dev/null || echo 'Not installed')"
+	@echo "Docker Compose: $$(docker-compose --version 2>/dev/null || echo 'Not installed')"
+	@echo "PostgreSQL: $$(psql --version 2>/dev/null || echo 'Not installed')"
+	@echo "Redis: $$(redis-cli --version 2>/dev/null || echo 'Not installed')"
 	@echo "$(GREEN)✅ Environment check complete$(RESET)"
 
 version: ## Show project version

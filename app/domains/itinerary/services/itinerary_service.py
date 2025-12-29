@@ -565,8 +565,11 @@ class ItineraryService:
         Returns:
             Created daily plan
         """
-        plan_data = data.model_dump(exclude={"activities"})
+        plan_data = data.model_dump(exclude={"activities"}, by_alias=True)
         plan_data["itinerary_id"] = itinerary_id
+        # Ensure we use 'date' for the model field
+        if "plan_date" in plan_data:
+            plan_data["date"] = plan_data.pop("plan_date")
         daily_plan = await self.daily_plan_repository.create(plan_data)
 
         # Create activities

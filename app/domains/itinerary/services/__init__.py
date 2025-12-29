@@ -3,6 +3,7 @@ AiGo Backend - Itinerary Services
 AI-powered itinerary planning services
 """
 
+from app.domains.itinerary.services.itinerary_service import ItineraryService
 from app.domains.itinerary.services.planner_graph import (
     AgentState,
     ExtractedIntent,
@@ -17,6 +18,7 @@ __all__ = [
     "AgentState",
     "ExtractedIntent",
     "GatheredData",
+    "ItineraryService",
     "PlannerStep",
     "build_planner_graph",
     "planner_graph",

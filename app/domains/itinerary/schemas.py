@@ -92,15 +92,20 @@ class DailyPlanBase(BaseModel):
     """Base schema for DailyPlan."""
 
     day_number: int = Field(..., ge=1)
-    date: date
+    plan_date: date = Field(..., validation_alias="date")
     title: str | None = Field(None, max_length=255)
     notes: str | None = None
     daily_budget: Decimal | None = Field(None, ge=0)
 
 
-class DailyPlanCreate(DailyPlanBase):
+class DailyPlanCreate(BaseModel):
     """Schema for creating a DailyPlan."""
 
+    day_number: int = Field(..., ge=1)
+    plan_date: date = Field(..., serialization_alias="date")
+    title: str | None = Field(None, max_length=255)
+    notes: str | None = None
+    daily_budget: Decimal | None = Field(None, ge=0)
     activities: list[ActivityCreate] = Field(default_factory=list)
 
 
@@ -112,13 +117,18 @@ class DailyPlanUpdate(BaseModel):
     daily_budget: Decimal | None = Field(None, ge=0)
 
 
-class DailyPlanResponse(DailyPlanBase):
+class DailyPlanResponse(BaseModel):
     """Schema for DailyPlan response."""
 
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
     id: UUID
     itinerary_id: UUID
+    day_number: int
+    plan_date: date = Field(..., validation_alias="date")
+    title: str | None = None
+    notes: str | None = None
+    daily_budget: Decimal | None = None
     activities: list[ActivityResponse] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
@@ -186,6 +196,17 @@ class ItineraryResponse(ItineraryBase):
     updated_at: datetime
     activities: list[ActivityResponse] = Field(default_factory=list)
     daily_plans: list[DailyPlanResponse] = Field(default_factory=list)
+    
+    # AI Generation fields
+    original_prompt: str | None = None
+    generation_task_id: str | None = None
+    generation_error: str | None = None
+    completed_at: datetime | None = None
+    
+    # Versioning fields
+    version: int = 1
+    last_replan_at: datetime | None = None
+    replan_task_id: str | None = None
 
     @property
     def duration_days(self) -> int:
@@ -969,7 +990,7 @@ class AIDailyPlan(BaseModel):
     """
 
     day_number: int = Field(..., ge=1, description="Day number in the trip (1-indexed)")
-    date: date = Field(..., description="Calendar date for this day")
+    plan_date: date = Field(..., description="Calendar date for this day")
     title: str = Field(
         ...,
         max_length=100,
