@@ -19,7 +19,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.config import settings
 from app.domains.itinerary.schemas import (
@@ -70,14 +70,37 @@ class ExtractedIntent(BaseModel):
     duration_days: int = Field(..., description="Trip duration in days")
     travelers_count: int = Field(default=1, description="Number of travelers")
     trip_type: str | None = Field(None, description="Trip type: solo, couple, family, group")
-    budget_amount: Decimal = Field(..., description="Total budget")
-    budget_currency: str = Field(default="THB", description="Budget currency")
-    interests: list[str] = Field(default_factory=list, description="Travel interests")
-    pace_preference: str = Field(default="moderate", description="Travel pace: relaxed, moderate, intensive")
+    budget_amount: Decimal | None = Field(None, description="Total budget if specified")
+    budget_currency: str | None = Field(default="THB", description="Budget currency")
+    interests: list[str] | None = Field(default_factory=list, description="Travel interests")
+    pace_preference: str | None = Field(default="moderate", description="Travel pace: relaxed, moderate, intensive")
     accommodation_preference: str | None = Field(None, description="Preferred accommodation type")
-    special_requirements: list[str] = Field(default_factory=list, description="Special needs or requirements")
-    must_visit_places: list[str] = Field(default_factory=list, description="Must-visit attractions")
-    dietary_restrictions: list[str] = Field(default_factory=list, description="Food restrictions")
+    special_requirements: list[str] | None = Field(default_factory=list, description="Special needs or requirements")
+    must_visit_places: list[str] | None = Field(default_factory=list, description="Must-visit attractions")
+    dietary_restrictions: list[str] | None = Field(default_factory=list, description="Food restrictions")
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_none_values(cls, data: dict) -> dict:
+        """Handle None values for fields with defaults."""
+        if isinstance(data, dict):
+            # List fields - convert None to empty list
+            list_fields = ["interests", "special_requirements", "must_visit_places", "dietary_restrictions"]
+            for field in list_fields:
+                if field in data and data[field] is None:
+                    data[field] = []
+            
+            # String fields with defaults - convert None to default
+            if data.get("pace_preference") is None:
+                data["pace_preference"] = "moderate"
+            if data.get("budget_currency") is None:
+                data["budget_currency"] = "THB"
+            
+            # Int field with default - convert None to default
+            if data.get("travelers_count") is None:
+                data["travelers_count"] = 1
+        
+        return data
 
 
 class GatheredData(BaseModel):
@@ -339,7 +362,9 @@ async def data_gathering_node(state: AgentState) -> dict:
     if intent.origin_city:
         tasks.append(_search_flights_with_fallback(intent))
     else:
-        tasks.append(asyncio.coroutine(lambda: None)())  # Placeholder
+        async def _noop():
+            return None
+        tasks.append(_noop())
 
     # Hotel search
     tasks.append(_search_hotels_with_fallback(intent))
@@ -800,10 +825,17 @@ async def itinerary_generation_node(state: AgentState) -> dict:
     if gathered and gathered.weather_forecast:
         forecasts = gathered.weather_forecast.get("daily_forecasts", [])
         if forecasts:
-            weather_summary = "\n".join(
-                f"- {f['date']}: {f['condition']['main']}, {f['temp_min']}-{f['temp_max']}°C"
-                for f in forecasts[:7]
-            )
+            weather_lines = []
+            for f in forecasts[:7]:
+                # Handle both nested and flat condition formats
+                condition = f.get('condition', 'Unknown')
+                if isinstance(condition, dict):
+                    condition = condition.get('main', 'Unknown')
+                # Handle both temp_min/temp_max and temp_low/temp_high formats
+                temp_min = f.get('temp_min') or f.get('temp_low', 'N/A')
+                temp_max = f.get('temp_max') or f.get('temp_high', 'N/A')
+                weather_lines.append(f"- {f.get('date', 'N/A')}: {condition}, {temp_min}-{temp_max}°C")
+            weather_summary = "\n".join(weather_lines)
 
     # Prepare attractions
     attractions_text = "No specific attractions found"
@@ -972,21 +1004,21 @@ async def _create_ai_activity(
 
     # Map category
     category_map = {
-        "sightseeing": "SIGHTSEEING",
-        "culture": "SIGHTSEEING",
-        "food": "DINING",
-        "dining": "DINING",
-        "restaurant": "DINING",
-        "shopping": "SHOPPING",
-        "entertainment": "ENTERTAINMENT",
-        "nightlife": "ENTERTAINMENT",
-        "transportation": "TRANSPORTATION",
-        "accommodation": "ACCOMMODATION",
-        "nature": "SIGHTSEEING",
+        "sightseeing": "sightseeing",
+        "culture": "sightseeing",
+        "food": "dining",
+        "dining": "dining",
+        "restaurant": "dining",
+        "shopping": "shopping",
+        "entertainment": "entertainment",
+        "nightlife": "entertainment",
+        "transportation": "transportation",
+        "accommodation": "accommodation",
+        "nature": "sightseeing",
     }
     from app.domains.itinerary.models import ActivityCategory
     category_str = raw_activity.get("category", "sightseeing").lower()
-    category = ActivityCategory(category_map.get(category_str, "OTHER"))
+    category = ActivityCategory(category_map.get(category_str, "other"))
 
     return AIActivity(
         title=raw_activity.get("title", "Activity"),
@@ -1101,20 +1133,29 @@ def _get_weather_for_date(
                 "thunderstorm": WeatherConditionEnum.STORMY,
             }
 
-            condition_str = forecast.get("condition", {}).get("main", "sunny").lower()
+            # Handle both nested and flat condition formats
+            condition_raw = forecast.get("condition", "sunny")
+            if isinstance(condition_raw, dict):
+                condition_str = condition_raw.get("main", "sunny").lower()
+            else:
+                condition_str = str(condition_raw).lower()
             condition = condition_map.get(condition_str, WeatherConditionEnum.SUNNY)
 
-            temp_c = forecast.get("temp_day", 25)
+            temp_c = forecast.get("temp_day") or forecast.get("temp_high", 25)
+
+            # Handle both nested and flat icon formats
+            icon_raw = forecast.get("condition", {})
+            icon = icon_raw.get("icon") if isinstance(icon_raw, dict) else None
 
             return WeatherContext(
                 condition=condition,
                 temperature_celsius=temp_c,
                 temperature_fahrenheit=temp_c * 9 / 5 + 32,
-                humidity_percent=forecast.get("humidity"),
-                precipitation_chance=int(forecast.get("precipitation_probability", 0) * 100),
+                humidity_percent=forecast.get("humidity") or forecast.get("humidity_percent"),
+                precipitation_chance=int(forecast.get("precipitation_probability", forecast.get("precipitation_chance", 0)) * 100 if forecast.get("precipitation_probability") else forecast.get("precipitation_chance", 0)),
                 uv_index=forecast.get("uv_index"),
                 advisory=forecast.get("advisory"),
-                icon=forecast.get("condition", {}).get("icon"),
+                icon=icon,
             )
 
     return None

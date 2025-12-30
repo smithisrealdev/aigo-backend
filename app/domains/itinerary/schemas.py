@@ -832,6 +832,21 @@ class AIActivity(BaseModel):
         description="Activity category for filtering/icons",
     )
 
+    @field_validator("category", mode="before")
+    @classmethod
+    def normalize_category(cls, v):
+        """Convert uppercase enum names to lowercase enum values."""
+        if isinstance(v, str):
+            # Convert to lowercase for matching enum values
+            v_lower = v.lower()
+            # Valid enum values
+            valid_values = ["transportation", "accommodation", "dining", "sightseeing", "entertainment", "shopping", "other"]
+            if v_lower in valid_values:
+                return v_lower
+            # Default to sightseeing for unknown categories
+            return "sightseeing"
+        return v
+
     # Timing
     start_time: time = Field(..., description="Activity start time")
     end_time: time = Field(..., description="Activity end time")
@@ -1001,6 +1016,21 @@ class AIDailyPlan(BaseModel):
         max_length=500,
         description="Brief summary of the day's plan",
     )
+
+    @field_validator("plan_date", mode="before")
+    @classmethod
+    def normalize_plan_date(cls, v, info):
+        """Accept 'date' field as alias for 'plan_date'."""
+        # If None, check if 'date' was provided in data
+        if v is None and info.data.get("date"):
+            return info.data["date"]
+        return v
+
+    def __init__(self, **data):
+        # Handle 'date' field as alias for 'plan_date'
+        if "date" in data and "plan_date" not in data:
+            data["plan_date"] = data.pop("date")
+        super().__init__(**data)
 
     # Activities
     activities: list[AIActivity] = Field(
