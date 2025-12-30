@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import date
 
 from langchain_core.prompts import ChatPromptTemplate
@@ -127,12 +128,13 @@ async def classify_intent(user_message: str) -> DetectedIntent:
         # Parse JSON response
         content = response.content.strip()
 
-        # Clean markdown if present
-        if content.startswith("```"):
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-            content = content.strip()
+        # Clean markdown code blocks if present
+        # Handle cases like: ```json\n{...}\n``` or ```\n{...}\n```
+        if "```" in content:
+            # Extract content between first ``` and last ```
+            json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
+            if json_match:
+                content = json_match.group(1).strip()
 
         intent_data = json.loads(content)
 

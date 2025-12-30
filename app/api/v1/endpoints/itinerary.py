@@ -1,5 +1,6 @@
 """Itinerary API endpoints."""
 
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -33,6 +34,10 @@ from app.domains.itinerary.services import (
 from app.infra.database import get_db
 
 router = APIRouter()
+
+# Default values for conversational trip generation
+DEFAULT_TRIP_BUDGET = Decimal("50000")
+DEFAULT_TRIP_CURRENCY = "THB"
 
 
 # TODO: Replace with actual auth dependency
@@ -158,11 +163,11 @@ async def generate_itinerary(
     # Step 2: Route based on intent type
     if intent.intent_type == IntentType.TRIP_GENERATION:
         # Create a GenerateItineraryRequest with default values
-        # The AI will extract actual budget from the prompt
+        # The AI will extract actual budget from the prompt during generation
         generate_request = GenerateItineraryRequest(
             prompt=request.prompt,
-            budget=50000,  # Default budget, will be refined by AI
-            currency="THB",
+            budget=DEFAULT_TRIP_BUDGET,
+            currency=DEFAULT_TRIP_CURRENCY,
             preferences=None,
         )
 

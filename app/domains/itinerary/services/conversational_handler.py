@@ -137,10 +137,17 @@ async def handle_general_inquiry(
 
     llm = get_llm(temperature=0.7)
 
+    # Prepare destination context - provide helpful context when missing
+    destination_text = (
+        intent.detected_destination
+        if intent.detected_destination
+        else "(destination from context)"
+    )
+
     prompt = ChatPromptTemplate.from_template(GENERAL_INQUIRY_PROMPT)
     messages = prompt.format_messages(
         user_message=user_message,
-        destination=intent.detected_destination or "not specified",
+        destination=destination_text,
         requires_search=str(intent.requires_search),
     )
 
@@ -236,11 +243,25 @@ async def handle_decision_support(
 
     llm = get_llm(temperature=0.7)
 
+    # Prepare comparison items - use more descriptive fallback
+    comparison_text = (
+        ", ".join(intent.comparison_items)
+        if intent.comparison_items
+        else "(items to compare extracted from question)"
+    )
+
+    # Prepare destination context - provide helpful context when missing
+    destination_text = (
+        intent.detected_destination
+        if intent.detected_destination
+        else "(destination context from question)"
+    )
+
     prompt = ChatPromptTemplate.from_template(DECISION_SUPPORT_PROMPT)
     messages = prompt.format_messages(
         user_message=user_message,
-        comparison_items=", ".join(intent.comparison_items or ["Unknown"]),
-        destination=intent.detected_destination or "not specified",
+        comparison_items=comparison_text,
+        destination=destination_text,
     )
 
     try:
