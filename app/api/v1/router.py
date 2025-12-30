@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, health, itinerary, onboarding, tasks, terms, ws
+from app.api.v1.endpoints import auth, chat, health, itinerary, onboarding, tasks, terms, ws
 
 api_router = APIRouter()
 
@@ -49,4 +49,11 @@ api_router.include_router(
 api_router.include_router(
     onboarding.router,
     tags=["Onboarding"],
+)
+
+# Include conversational AI chat endpoints
+api_router.include_router(
+    chat.router,
+    prefix="/chat",
+    tags=["Chat"],
 )

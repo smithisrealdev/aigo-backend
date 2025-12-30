@@ -73,6 +73,29 @@ async def get_token_payload(
     return payload
 
 
+async def get_current_user_id(
+    token_payload: Annotated[TokenPayload, Depends(get_token_payload)],
+) -> UUID:
+    """Get the current authenticated user ID from JWT token.
+    
+    This is a lightweight dependency that only extracts the user ID
+    without database lookup. Use when you only need the ID.
+    
+    Args:
+        token_payload: Validated JWT payload
+        
+    Returns:
+        The user's UUID
+        
+    Raises:
+        InvalidTokenError: If token is invalid or user ID malformed
+    """
+    try:
+        return UUID(token_payload.sub)
+    except ValueError:
+        raise InvalidTokenError("Invalid user ID in token")
+
+
 async def get_current_user(
     token_payload: Annotated[TokenPayload, Depends(get_token_payload)],
     session: Annotated[AsyncSession, Depends(get_db_session_dep)],
