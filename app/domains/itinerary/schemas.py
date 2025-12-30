@@ -363,6 +363,90 @@ class ItineraryStatusResponse(BaseModel):
     is_ready: bool = False
 
 
+# ============ Conversational AI Schemas ============
+
+
+class IntentType(str, Enum):
+    """Types of conversation intents for the generate endpoint."""
+
+    TRIP_GENERATION = "trip_generation"
+    GENERAL_INQUIRY = "general_inquiry"
+    CHIT_CHAT = "chit_chat"
+    DECISION_SUPPORT = "decision_support"
+
+
+class DetectedIntent(BaseModel):
+    """Detected intent from user prompt."""
+
+    intent_type: IntentType = Field(..., description="Classified intent type")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score")
+    requires_search: bool = Field(
+        default=False,
+        description="Whether to search for real-time data",
+    )
+    detected_destination: str | None = Field(
+        None,
+        description="Destination if mentioned in prompt",
+    )
+    detected_dates: dict | None = Field(
+        None,
+        description="Dates if mentioned in prompt",
+    )
+    comparison_items: list[str] | None = Field(
+        None,
+        description="Items to compare for decision support",
+    )
+
+
+class ConversationalRequest(BaseModel):
+    """Request schema for conversational AI endpoint (simplified)."""
+
+    prompt: str = Field(
+        ...,
+        min_length=1,
+        max_length=2000,
+        description="User's message or travel request",
+        examples=[
+            "ญี่ปุ่นใช้ปลั๊กไฟแบบไหน?",
+            "ตื่นเต้นจังเลย จะได้ไปญี่ปุ่นครั้งแรกแล้ว",
+            "ระหว่างเกียวโตกับโอซาก้า ที่ไหนเหมาะกับสายกินมากกว่ากัน?",
+            "อยากไปเที่ยวโตเกียว 5 วัน งบ 50000 บาท",
+        ],
+    )
+
+
+class ConversationalResponse(BaseModel):
+    """Response for non-trip-generation intents."""
+
+    intent: IntentType = Field(..., description="Detected intent type")
+    message: str = Field(..., description="AI response message")
+    suggestions: list[str] | None = Field(
+        None,
+        description="Follow-up suggestions for the user",
+    )
+    sources: list[str] | None = Field(
+        None,
+        description="Data sources used for the response",
+    )
+    created_at: datetime = Field(..., description="Response timestamp")
+
+
+class TripGenerationResponse(BaseModel):
+    """Response when trip generation is triggered."""
+
+    intent: IntentType = Field(
+        default=IntentType.TRIP_GENERATION,
+        description="Intent type (always trip_generation)",
+    )
+    itinerary_id: UUID = Field(..., description="ID of the created itinerary")
+    task_id: str = Field(..., description="Celery task ID for progress tracking")
+    status: ItineraryStatus = Field(..., description="Initial status (PROCESSING)")
+    message: str = Field(..., description="Human-readable status message")
+    websocket_url: str = Field(..., description="WebSocket URL for real-time progress")
+    poll_url: str = Field(..., description="REST URL for polling progress")
+    created_at: datetime = Field(..., description="Response timestamp")
+
+
 # ============ Smart Re-plan Schemas ============
 
 

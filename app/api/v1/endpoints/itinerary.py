@@ -9,8 +9,11 @@ from app.domains.itinerary.schemas import (
     ActivityCreate,
     ActivityResponse,
     ActivityUpdate,
+    ConversationalRequest,
+    ConversationalResponse,
     GenerateItineraryRequest,
     GenerateItineraryResponse,
+    IntentType,
     ItineraryCreate,
     ItineraryFullDataResponse,
     ItineraryListResponse,
@@ -19,9 +22,14 @@ from app.domains.itinerary.schemas import (
     ItineraryUpdate,
     ReplanRequest,
     ReplanResponse,
+    TripGenerationResponse,
     VersionHistoryResponse,
 )
-from app.domains.itinerary.services import ItineraryService
+from app.domains.itinerary.services import (
+    ItineraryService,
+    classify_intent,
+    handle_conversational_intent,
+)
 from app.infra.database import get_db
 
 router = APIRouter()
@@ -46,32 +54,168 @@ def get_itinerary_service(
 
 @router.post(
     "/generate",
+    response_model=TripGenerationResponse | ConversationalResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Conversational AI endpoint for travel assistance",
+    description="""
+    Submit a natural language prompt and receive an AI-powered response.
+    The AI analyzes user intent and responds appropriately:
+
+    **Intent Types:**
+
+    1. **TRIP_GENERATION** - User wants to create/plan a trip
+       - Returns: `TripGenerationResponse` with itinerary_id, task_id, websocket_url
+       - Example: "วางแผนเที่ยวโตเกียว 5 วัน งบ 50000 บาท"
+
+    2. **GENERAL_INQUIRY** - User asks factual travel questions
+       - Returns: `ConversationalResponse` with answer and suggestions
+       - Example: "ญี่ปุ่นใช้ปลั๊กไฟแบบไหน?"
+
+    3. **CHIT_CHAT** - User is chatting or expressing emotions
+       - Returns: `ConversationalResponse` with friendly reply
+       - Example: "ตื่นเต้นจังเลย จะได้ไปญี่ปุ่นครั้งแรกแล้ว"
+
+    4. **DECISION_SUPPORT** - User wants to compare options
+       - Returns: `ConversationalResponse` with comparison and recommendation
+       - Example: "ระหว่างเกียวโตกับโอซาก้า ที่ไหนเหมาะกับสายกินมากกว่ากัน?"
+
+    **Progress Tracking (for trip generation):**
+    - WebSocket: Connect to `websocket_url` for real-time updates
+    - Polling: GET `poll_url` for current status
+
+    **Bilingual Support:**
+    - Responds in the same language as the user (Thai/English)
+    """,
+    responses={
+        200: {
+            "description": "Successful response - type depends on detected intent",
+            "content": {
+                "application/json": {
+                    "examples": {
+                        "trip_generation": {
+                            "summary": "Trip Generation Response",
+                            "value": {
+                                "intent": "trip_generation",
+                                "itinerary_id": "123e4567-e89b-12d3-a456-426614174000",
+                                "task_id": "celery-task-id",
+                                "status": "processing",
+                                "message": "กำลังวางแผนทริปโตเกียว 5 วัน งบ 50,000 บาทให้ครับ รอสักครู่นะครับ...",
+                                "websocket_url": "/api/v1/ws/itinerary/celery-task-id",
+                                "poll_url": "/api/v1/tasks/celery-task-id",
+                                "created_at": "2025-01-01T00:00:00Z",
+                            },
+                        },
+                        "general_inquiry": {
+                            "summary": "General Inquiry Response",
+                            "value": {
+                                "intent": "general_inquiry",
+                                "message": "ญี่ปุ่นใช้ปลั๊กไฟแบบ Type A (2 ขาแบน) ไฟฟ้า 100V...",
+                                "suggestions": ["ดูรายการสิ่งที่ต้องเตรียมไปญี่ปุ่น", "เริ่มวางแผนทริปญี่ปุ่น"],
+                                "sources": ["AiGO Knowledge Base"],
+                                "created_at": "2025-01-01T00:00:00Z",
+                            },
+                        },
+                        "chit_chat": {
+                            "summary": "Chit Chat Response",
+                            "value": {
+                                "intent": "chit_chat",
+                                "message": "ยินดีด้วยครับ! 🎉 ทริปแรกที่ญี่ปุ่นต้องประทับใจแน่นอน...",
+                                "suggestions": ["เล่าให้ฟังหน่อยว่าชอบเที่ยวแบบไหน", "ดูแผนทริปญี่ปุ่นยอดนิยม"],
+                                "created_at": "2025-01-01T00:00:00Z",
+                            },
+                        },
+                        "decision_support": {
+                            "summary": "Decision Support Response",
+                            "value": {
+                                "intent": "decision_support",
+                                "message": "เปรียบเทียบสำหรับสายกินครับ:\n\n🏯 **เกียวโต**...",
+                                "suggestions": ["จัดทริปโอซาก้าให้หน่อย", "อยากไปทั้งสองที่ เป็นไปได้ไหม?"],
+                                "sources": ["AiGO Knowledge Base"],
+                                "created_at": "2025-01-01T00:00:00Z",
+                            },
+                        },
+                    },
+                },
+            },
+        },
+    },
+)
+async def generate_itinerary(
+    request: ConversationalRequest,
+    service: ItineraryService = Depends(get_itinerary_service),
+    user_id: UUID = Depends(get_current_user_id),
+) -> TripGenerationResponse | ConversationalResponse:
+    """
+    Conversational AI endpoint for travel assistance.
+
+    Analyzes user intent and responds appropriately:
+    - Trip generation triggers async itinerary creation
+    - Other intents return immediate conversational responses
+    """
+    # Step 1: Classify the user's intent
+    intent = await classify_intent(request.prompt)
+
+    # Step 2: Route based on intent type
+    if intent.intent_type == IntentType.TRIP_GENERATION:
+        # Create a GenerateItineraryRequest with default values
+        # The AI will extract actual budget from the prompt
+        generate_request = GenerateItineraryRequest(
+            prompt=request.prompt,
+            budget=50000,  # Default budget, will be refined by AI
+            currency="THB",
+            preferences=None,
+        )
+
+        # Use existing generation flow
+        result = await service.generate_itinerary_from_prompt(user_id, generate_request)
+
+        return TripGenerationResponse(
+            intent=IntentType.TRIP_GENERATION,
+            itinerary_id=result.itinerary_id,
+            task_id=result.task_id,
+            status=result.status,
+            message=result.message,
+            websocket_url=result.websocket_url,
+            poll_url=result.poll_url,
+            created_at=result.created_at,
+        )
+
+    else:
+        # Handle non-trip intents with conversational response
+        return await handle_conversational_intent(request.prompt, intent)
+
+
+@router.post(
+    "/generate/legacy",
     response_model=GenerateItineraryResponse,
     status_code=status.HTTP_202_ACCEPTED,
-    summary="Generate itinerary from natural language prompt",
+    summary="[Legacy] Generate itinerary from natural language prompt",
     description="""
-    Submit a natural language description of your trip and receive an 
+    **DEPRECATED: Use POST /generate instead for conversational AI support.**
+
+    Submit a natural language description of your trip and receive an
     AI-generated itinerary. This endpoint returns immediately with a task ID
     that can be used to track generation progress.
-    
+
     **Progress Tracking:**
     - WebSocket: Connect to `/api/v1/ws/itinerary/{task_id}` for real-time updates
     - Polling: GET `/api/v1/tasks/{task_id}` for current status
-    
+
     **Example prompts:**
     - "Plan a 5-day trip to Tokyo with focus on food and culture"
     - "Family vacation to Paris for 7 days with kids, budget $5000"
     - "Adventure trip to Costa Rica, hiking and beaches, moderate budget"
     """,
+    deprecated=True,
 )
-async def generate_itinerary(
+async def generate_itinerary_legacy(
     request: GenerateItineraryRequest,
     service: ItineraryService = Depends(get_itinerary_service),
     user_id: UUID = Depends(get_current_user_id),
 ) -> GenerateItineraryResponse:
     """
-    Generate a new itinerary from natural language prompt.
-    
+    [Legacy] Generate a new itinerary from natural language prompt.
+
     The itinerary is generated asynchronously via a background task.
     Returns immediately with task and itinerary IDs for progress tracking.
     """
