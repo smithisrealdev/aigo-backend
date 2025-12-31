@@ -106,7 +106,7 @@ All configuration is managed through environment variables. See `.env.example` f
 ## 🧪 Testing
 
 ```bash
-# Run all tests
+# Run unit tests
 poetry run pytest
 
 # With coverage
@@ -114,7 +114,14 @@ poetry run pytest --cov=app
 
 # Run specific test file
 poetry run pytest tests/test_itinerary.py -v
+
+# Integration tests
+python scripts/test_full_itinerary_mcp_tools.py
+python scripts/test_conversation_loop.py
+python scripts/test_trip_planning_strategy.py
 ```
+
+For detailed testing documentation, see [docs/TESTING_GUIDE.md](docs/TESTING_GUIDE.md) and [docs/TRIP_PLANNING_STRATEGY_TEST.md](docs/TRIP_PLANNING_STRATEGY_TEST.md).
 
 ## 🛠️ Development
 
