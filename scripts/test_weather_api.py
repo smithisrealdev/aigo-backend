@@ -6,11 +6,19 @@ Run: python scripts/test_weather_api.py
 
 import asyncio
 import sys
+import traceback
 from datetime import date, timedelta
 from pathlib import Path
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Test data
+TEST_LOCATIONS = [
+    {"name": "Bangkok", "location": "Bangkok"},
+    {"name": "Tokyo", "location": "Tokyo"},
+    {"name": "Bangkok (coordinates)", "location": "13.7563,100.5018"},
+]
 
 
 async def test_weather_api():
@@ -39,19 +47,13 @@ async def test_weather_api():
         print("   3. Add to .env: WEATHER_API_KEY=your_api_key")
         return False
 
-    print("\n" + "=" * 60)
+    print("=" * 60)
     print("TEST 1: Current Weather API")
     print("=" * 60)
 
-    test_locations = [
-        {"name": "Bangkok", "location": "Bangkok"},
-        {"name": "Tokyo", "location": "Tokyo"},
-        {"name": "Bangkok (coordinates)", "location": "13.7563,100.5018"},
-    ]
-
     all_success = True
 
-    for test_case in test_locations:
+    for test_case in TEST_LOCATIONS:
         print(f"\n🧪 Testing: {test_case['name']}")
         print(f"   Location: {test_case['location']}")
 
@@ -184,7 +186,6 @@ def main():
         sys.exit(1)
     except Exception as e:
         print(f"\n\n❌ Unexpected error: {e}")
-        import traceback
         traceback.print_exc()
         sys.exit(1)
 
