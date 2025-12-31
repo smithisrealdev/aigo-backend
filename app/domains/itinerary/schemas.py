@@ -1,6 +1,6 @@
 """Pydantic schemas for the Itinerary domain."""
 
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import Enum
 from uuid import UUID
@@ -8,6 +8,37 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.domains.itinerary.models import ActivityCategory, ItineraryStatus
+
+# ============ Image Schemas ============
+
+
+class LocationImage(BaseModel):
+    """Image for a location/activity."""
+
+    url: str = Field(..., description="Full resolution image URL")
+    thumbnail_url: str = Field(..., description="Thumbnail URL for previews")
+    width: int | None = Field(None, description="Image width in pixels")
+    height: int | None = Field(None, description="Image height in pixels")
+    source_url: str | None = Field(None, description="Page where image was found")
+    source_domain: str | None = Field(None, description="Domain of the source")
+    title: str | None = Field(None, description="Image title/alt text")
+
+    # Attribution
+    attribution: str | None = Field(None, description="Image attribution if required")
+    license_type: str | None = Field(None, description="License type if known")
+
+
+class LocationImages(BaseModel):
+    """Collection of images for a location."""
+
+    location_name: str = Field(..., description="Name of the location")
+    query_used: str = Field(..., description="Search query used")
+    images: list[LocationImage] = Field(default_factory=list)
+
+    # Metadata
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    is_cached: bool = Field(default=False)
+    cache_expires_at: datetime | None = None
 
 
 # ============ Activity Schemas ============
@@ -196,13 +227,13 @@ class ItineraryResponse(ItineraryBase):
     updated_at: datetime
     activities: list[ActivityResponse] = Field(default_factory=list)
     daily_plans: list[DailyPlanResponse] = Field(default_factory=list)
-    
+
     # AI Generation fields
     original_prompt: str | None = None
     generation_task_id: str | None = None
     generation_error: str | None = None
     completed_at: datetime | None = None
-    
+
     # Versioning fields
     version: int = 1
     last_replan_at: datetime | None = None
@@ -510,7 +541,7 @@ class ReplanRequest(BaseModel):
         None,
         description="Additional preferences for replanning (e.g., prefer indoor, avoid crowds)",
     )
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -586,18 +617,18 @@ class ReplanResponse(BaseModel):
     status: str = Field(..., description="Replan status: processing, completed, failed")
     message: str = Field(..., description="Human-readable status message")
     websocket_url: str = Field(..., description="WebSocket URL for real-time updates")
-    
+
     # Version info
     version: int = Field(..., description="New version number after replan")
     previous_version: int = Field(..., description="Previous version number")
-    
+
     # Changes summary (populated when complete)
     summary: ReplanSummary | None = None
     changes: list[ReplanChange] | None = Field(
         None,
         description="List of changes made (highlighted for frontend)",
     )
-    
+
     # Alert info for proactive replans
     is_critical: bool = Field(
         default=False,
@@ -607,7 +638,7 @@ class ReplanResponse(BaseModel):
         None,
         description="Alert message for WebSocket notification",
     )
-    
+
     created_at: datetime
 
 
@@ -618,20 +649,20 @@ class ReplanCompletedResponse(BaseModel):
     version: int
     previous_version: int
     status: str = "completed"
-    
+
     # The updated itinerary data
     updated_data: dict = Field(..., description="Complete updated itinerary (AIFullItinerary)")
-    
+
     # Change details
     summary: ReplanSummary
     changes: list[ReplanChange]
-    
+
     # For frontend highlighting
     changed_activity_ids: list[str] = Field(
         default_factory=list,
         description="IDs of activities that changed (for UI highlighting)",
     )
-    
+
     completed_at: datetime
 
 
@@ -643,15 +674,15 @@ class ProactiveAlertPayload(BaseModel):
     severity: str = Field(..., description="Severity: info, warning, critical")
     title: str = Field(..., max_length=100)
     message: str = Field(..., max_length=500)
-    
+
     # Affected items
     affected_day: int | None = None
     affected_activities: list[str] | None = None
-    
+
     # Action
     action_url: str | None = Field(None, description="Deep link to replan action")
     action_text: str | None = Field(None, description="CTA text like 'View alternatives'")
-    
+
     # Metadata
     trigger_type: ReplanTriggerType
     timestamp: datetime
@@ -856,7 +887,7 @@ class WeatherContext(BaseModel):
         max_length=50,
         description="Weather icon identifier for UI",
     )
-    
+
     # Fallback indicator
     is_estimated: bool = Field(
         default=False,
@@ -894,6 +925,20 @@ class LocationInfo(BaseModel):
     photos: list[str] | None = Field(
         None,
         description="Photo URLs for the location",
+    )
+
+    # Images from Google Image Search
+    images: list[LocationImage] | None = Field(
+        None,
+        description="Images of this location from Google Image Search",
+    )
+    primary_image_url: str | None = Field(
+        None,
+        description="Primary image URL for thumbnail display",
+    )
+    primary_thumbnail_url: str | None = Field(
+        None,
+        description="Primary thumbnail URL for list views",
     )
 
 
@@ -984,7 +1029,17 @@ class AIActivity(BaseModel):
         max_length=300,
         description="Accessibility information",
     )
-    
+
+    # Activity images
+    activity_images: list[LocationImage] | None = Field(
+        None,
+        description="Images related to this activity",
+    )
+    hero_image_url: str | None = Field(
+        None,
+        description="Hero image URL for activity card",
+    )
+
     # Fallback indicator
     is_estimated: bool = Field(
         default=False,
@@ -1069,7 +1124,7 @@ class BookingOption(BaseModel):
         None,
         description="Price validity expiration",
     )
-    
+
     # Fallback indicator
     is_estimated: bool = Field(
         default=False,
@@ -1191,6 +1246,16 @@ class AIFullItinerary(BaseModel):
         description="Complete daily plans for the trip",
     )
 
+    # Destination images
+    destination_images: list[LocationImage] | None = Field(
+        None,
+        description="Images of the main destination",
+    )
+    cover_image_url: str | None = Field(
+        None,
+        description="Main cover image URL for itinerary",
+    )
+
     # Booking options
     flight_options: list[BookingOption] | None = Field(
         None,
@@ -1265,7 +1330,7 @@ class AIFullItinerary(BaseModel):
         None,
         description="Data sources used (Amadeus, Google Maps, Weather API, etc.)",
     )
-    
+
     # Fallback indicators
     has_estimated_data: bool = Field(
         default=False,

@@ -147,6 +147,24 @@ class Settings(BaseSettings):
         description="Google Places API Key (can be same as Maps)",
     )
 
+    # ============ Google Custom Search (Image) Settings ============
+    GOOGLE_SEARCH_API_KEY: str = Field(
+        default="",
+        description="Google Custom Search API Key",
+    )
+    GOOGLE_SEARCH_CX: str = Field(
+        default="",
+        description="Google Custom Search Engine ID",
+    )
+    GOOGLE_IMAGE_SEARCH_ENABLED: bool = Field(
+        default=True,
+        description="Enable/disable Google Image Search",
+    )
+    GOOGLE_IMAGE_CACHE_TTL: int = Field(
+        default=86400,
+        description="Image cache TTL in seconds (24h)",
+    )
+
     # ============ OpenAI Settings (for AI features) ============
     OPENAI_API_KEY: str = Field(
         default="",
