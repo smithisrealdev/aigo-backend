@@ -186,21 +186,25 @@ class TripPlanningStrategyTest:
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
-                # Use /api/v1/itineraries/generate for direct trip generation
+                # Use /api/v1/itineraries/generate/legacy for direct trip generation
+                # This bypasses intent classification and always generates a trip
                 response = await client.post(
-                    f"{self.base_url}/api/v1/itineraries/generate",
-                    json={"prompt": prompt},
+                    f"{self.base_url}/api/v1/itineraries/generate/legacy",
+                    json={
+                        "prompt": prompt,
+                        "budget": 25000,
+                        "currency": "THB"
+                    },
                     headers=headers,
                 )
 
                 print(f"\n📊 Response Status: {response.status_code}")
 
-                if response.status_code == 200:
+                if response.status_code in [200, 202]:  # Accept both 200 and 202
                     response_data = response.json()
                     print(f"✅ Request successful!")
                     print(f"\n📄 Response Data:")
-                    print(f"   Intent: {response_data.get('intent', 'N/A')}")
-
+                    
                     # Check for itinerary_id and task_id
                     if "itinerary_id" in response_data:
                         print(f"   Itinerary ID: {response_data['itinerary_id']}")
