@@ -74,7 +74,7 @@ class UserRepository(GenericRepository[User, UserCreate, UserUpdate]):
         """
         user_data = data.model_dump(exclude={"password"})
         user_data["hashed_password"] = hash_password(data.password)
-        user_data["provider"] = AuthProvider.LOCAL
+        user_data["provider"] = AuthProvider.LOCAL.value  # Use .value for database insertion
         
         return await self.create(user_data)
 
