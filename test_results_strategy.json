@@ -1,5 +1,5 @@
 {
-  "server_available": false,
+  "server_available": true,
   "request_success": false,
   "task_completion": false,
   "websocket_tested": false,

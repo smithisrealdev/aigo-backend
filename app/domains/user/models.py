@@ -9,7 +9,8 @@ This module defines the User model with support for:
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Index, String, func
+from sqlalchemy import Boolean, DateTime, Enum as SAEnum, Index, String, func
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.infra.database import Base
@@ -69,10 +70,10 @@ class User(Base):
     )
 
     # Social login fields
-    provider: Mapped[AuthProvider] = mapped_column(
-        Enum(AuthProvider),
-        default=AuthProvider.LOCAL,
+    provider: Mapped[str] = mapped_column(
+        PG_ENUM('local', 'google', 'facebook', 'apple', name='authprovider', create_type=False),
         nullable=False,
+        server_default='local',
     )
     social_id: Mapped[str | None] = mapped_column(
         String(255),
