@@ -216,37 +216,22 @@ def generate_itinerary_task(
         # Create progress callback for LangGraph
         progress_callback = LangGraphProgressCallback(task_id, tracker, itinerary_id)
         
-        # Run LangGraph workflow
-        generated_itinerary = asyncio.run(
-            _run_langgraph_workflow(
+        # Run LangGraph workflow and save to DB in same event loop
+        # This prevents "Future attached to different loop" errors in Python 3.14
+        generated_itinerary, itinerary_dict = asyncio.run(
+            _run_workflow_and_save(
                 itinerary_id=itinerary_id,
                 user_prompt=user_prompt,
                 user_id=user_id,
                 preferences=preferences,
                 progress_callback=progress_callback,
+                task_id=task_id,
+                tracker=tracker,
             )
         )
         
         if not generated_itinerary:
             raise RuntimeError("AI workflow failed to generate itinerary")
-        
-        # Convert to serializable dict
-        itinerary_dict = generated_itinerary.model_dump(mode="json")
-        
-        # Save to database
-        tracker.update(
-            task_id=task_id,
-            status=TaskStatus.PROGRESS,
-            step=TaskStep.SAVING_ITINERARY,
-            progress=98,
-            message="💾 Saving your itinerary to database...",
-            data={"itinerary_id": itinerary_id},
-        )
-        
-        asyncio.run(_save_itinerary_to_db(
-            itinerary_id=itinerary_id,
-            itinerary_data=itinerary_dict,
-        ))
         
         # Mark as completed
         tracker.update(
@@ -286,8 +271,8 @@ def generate_itinerary_task(
             can_retry=True,
             retry_after=30,  # Suggest waiting 30 seconds
         )
-        # Mark failed in database
-        asyncio.run(_mark_itinerary_failed(itinerary_id, "Task timed out"))
+        # Mark failed in database (using sync to avoid event loop issues)
+        _mark_itinerary_failed_sync(itinerary_id, "Task timed out")
         raise
         
     except Exception as e:
@@ -311,8 +296,8 @@ def generate_itinerary_task(
             retry_after=retry_after,
         )
         
-        # Mark failed in database before retry
-        asyncio.run(_mark_itinerary_failed(itinerary_id, str(e)))
+        # Mark failed in database (using sync to avoid event loop issues)
+        _mark_itinerary_failed_sync(itinerary_id, str(e))
         
         # Retry if attempts remaining and error is retriable
         if can_retry and self.request.retries < self.max_retries:
@@ -408,6 +393,57 @@ async def _run_langgraph_workflow(
     )
 
 
+async def _run_workflow_and_save(
+    itinerary_id: str,
+    user_prompt: str,
+    user_id: str | None,
+    preferences: dict[str, Any] | None,
+    progress_callback: LangGraphProgressCallback,
+    task_id: str,
+    tracker: TaskProgressTracker,
+) -> tuple[Any, dict[str, Any]]:
+    """
+    Run the LangGraph workflow and save to database in a single event loop.
+    
+    This prevents the "Future attached to different loop" error in Python 3.14+
+    by keeping all async operations in the same event loop context.
+    
+    Returns:
+        Tuple of (generated_itinerary, itinerary_dict)
+    """
+    # Run LangGraph workflow
+    generated_itinerary = await _run_langgraph_workflow(
+        itinerary_id=itinerary_id,
+        user_prompt=user_prompt,
+        user_id=user_id,
+        preferences=preferences,
+        progress_callback=progress_callback,
+    )
+    
+    if not generated_itinerary:
+        return None, {}
+    
+    # Convert to serializable dict
+    itinerary_dict = generated_itinerary.model_dump(mode="json")
+    
+    # Save to database
+    tracker.update(
+        task_id=task_id,
+        status=TaskStatus.PROGRESS,
+        step=TaskStep.SAVING_ITINERARY,
+        progress=98,
+        message="💾 Saving your itinerary to database...",
+        data={"itinerary_id": itinerary_id},
+    )
+    
+    await _save_itinerary_to_db(
+        itinerary_id=itinerary_id,
+        itinerary_data=itinerary_dict,
+    )
+    
+    return generated_itinerary, itinerary_dict
+
+
 async def _save_itinerary_to_db(
     itinerary_id: str,
     itinerary_data: dict[str, Any],
@@ -485,6 +521,55 @@ async def _mark_itinerary_failed(
             logger.info(f"Itinerary {itinerary_id} marked as failed")
     except Exception as e:
         logger.error(f"Failed to mark itinerary {itinerary_id} as failed: {e}")
+
+
+def _mark_itinerary_failed_sync(
+    itinerary_id: str,
+    error_message: str,
+) -> None:
+    """
+    Mark itinerary as failed using synchronous database connection.
+    Used in exception handlers where asyncio event loop may be closed.
+    
+    Falls back to logging if synchronous database driver is not available.
+    """
+    import os
+    from app.core.config import settings
+    
+    try:
+        # Try using psycopg2 if available
+        import psycopg2
+        
+        # Parse DATABASE_URL for psycopg2
+        db_url = settings.DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://")
+        
+        conn = psycopg2.connect(db_url)
+        cur = conn.cursor()
+        
+        cur.execute(
+            """
+            UPDATE itineraries 
+            SET status = 'FAILED', 
+                generation_error = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (error_message[:500], str(itinerary_id))  # Truncate error message
+        )
+        
+        conn.commit()
+        cur.close()
+        conn.close()
+        
+        logger.info(f"Itinerary {itinerary_id} marked as failed (sync)")
+    except ImportError:
+        # psycopg2 not available, log warning but don't crash
+        logger.warning(
+            f"psycopg2 not available, cannot mark itinerary {itinerary_id} as failed in DB. "
+            f"Error was: {error_message[:200]}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to mark itinerary {itinerary_id} as failed (sync): {e}")
 
 
 # ============ Update Itinerary Task ============

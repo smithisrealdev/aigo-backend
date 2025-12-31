@@ -101,8 +101,63 @@ class TripPlanningStrategyTest:
             print(f"   poetry run uvicorn app.main:app --reload")
             return False
 
+    async def authenticate(self) -> str | None:
+        """Register/login test user and get access token."""
+        print("\n" + "=" * 80)
+        print("🔐 Authenticating Test User")
+        print("=" * 80)
+
+        test_email = "test_e2e@example.com"
+        test_password = "Test123456!"
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                # Try to register first
+                register_response = await client.post(
+                    f"{self.base_url}/api/v1/auth/register",
+                    json={
+                        "email": test_email,
+                        "password": test_password,
+                        "full_name": "E2E Test User",
+                    },
+                )
+
+                if register_response.status_code == 201:
+                    data = register_response.json()
+                    print(f"✅ Registered new test user: {test_email}")
+                    # Token is nested in tokens.access_token
+                    tokens = data.get("tokens", {})
+                    return tokens.get("access_token")
+                elif register_response.status_code == 409:
+                    # User exists, try login
+                    login_response = await client.post(
+                        f"{self.base_url}/api/v1/auth/login",
+                        json={
+                            "email": test_email,
+                            "password": test_password,
+                        },
+                    )
+                    if login_response.status_code == 200:
+                        data = login_response.json()
+                        print(f"✅ Logged in as existing test user: {test_email}")
+                        # Token is nested in tokens.access_token
+                        tokens = data.get("tokens", {})
+                        return tokens.get("access_token")
+                    else:
+                        print(f"❌ Login failed: {login_response.status_code}")
+                        print(f"   Response: {login_response.text}")
+                        return None
+                else:
+                    print(f"❌ Registration failed: {register_response.status_code}")
+                    print(f"   Response: {register_response.text}")
+                    return None
+
+        except Exception as e:
+            print(f"❌ Authentication error: {str(e)}")
+            return None
+
     async def test_trip_generation_request(
-        self, custom_prompt: str | None = None
+        self, custom_prompt: str | None = None, access_token: str | None = None
     ) -> dict[str, Any] | None:
         """Test trip generation request and capture response."""
         print("\n" + "=" * 80)
@@ -120,14 +175,22 @@ class TripPlanningStrategyTest:
             )
 
         print(f"\n📝 Test Prompt:")
-        # Use proper newline instead of chr(10)
-        print(f"   {prompt.replace('\n', '\n   ')}")
+        # Use proper newline formatting
+        formatted_prompt = prompt.replace('\n', '\n   ')
+        print(f"   {formatted_prompt}")
+
+        # Prepare headers with auth token
+        headers = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
+                # Use /api/v1/itineraries/generate for direct trip generation
                 response = await client.post(
-                    f"{self.base_url}/api/v1/chat",
-                    json={"message": prompt},
+                    f"{self.base_url}/api/v1/itineraries/generate",
+                    json={"prompt": prompt},
+                    headers=headers,
                 )
 
                 print(f"\n📊 Response Status: {response.status_code}")
@@ -230,6 +293,9 @@ class TripPlanningStrategyTest:
                     except asyncio.TimeoutError:
                         # No message received in 5 seconds, check if still connected
                         continue
+                    except asyncio.CancelledError:
+                        print("⚠️  WebSocket operation cancelled")
+                        break
                     except Exception as e:
                         print(f"⚠️  Error receiving message: {str(e)}")
                         break
@@ -239,6 +305,12 @@ class TripPlanningStrategyTest:
                 
                 return ws_result
                 
+        except asyncio.CancelledError:
+            print("⚠️  WebSocket connection cancelled")
+            ws_result["error"] = "Cancelled"
+            self.test_results["websocket_tested"] = True
+            self.test_results["websocket_working"] = False
+            return ws_result
         except Exception as e:
             print(f"❌ WebSocket connection failed: {str(e)}")
             print(f"   This is acceptable if WebSocket endpoint is not configured")
@@ -247,7 +319,43 @@ class TripPlanningStrategyTest:
             self.test_results["websocket_working"] = False
             return ws_result
 
-    async def test_context_retention(self) -> dict[str, Any]:
+    async def _poll_task_status(self, task_id: str, timeout: int = 120) -> dict[str, Any]:
+        """Poll task status via REST API until completion or timeout."""
+        print(f"\n🔄 Polling task status for {task_id}...")
+        start_time = asyncio.get_event_loop().time()
+        last_status = None
+        
+        while True:
+            elapsed = asyncio.get_event_loop().time() - start_time
+            if elapsed > timeout:
+                print(f"\n⏰ Polling timeout after {timeout} seconds")
+                return {"status": "timeout", "last_status": last_status}
+            
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    response = await client.get(
+                        f"{self.base_url}/api/v1/tasks/{task_id}"
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        status = data.get("status", "unknown")
+                        progress = data.get("progress", 0)
+                        message = data.get("message", "")
+                        
+                        if status != last_status:
+                            print(f"   📊 [{progress}%] {status}: {message[:60]}...")
+                            last_status = status
+                        
+                        if status in ["completed", "failed"]:
+                            print(f"\n{'✅' if status == 'completed' else '❌'} Task {status} (via polling)")
+                            return {"status": status, "data": data}
+                    
+            except Exception as e:
+                print(f"   ⚠️ Poll error: {e}")
+            
+            await asyncio.sleep(3)  # Poll every 3 seconds
+
+    async def test_context_retention(self, access_token: str | None = None) -> dict[str, Any]:
         """Test multi-turn conversation context retention."""
         print("\n" + "=" * 80)
         print("🧠 STEP 4: Testing Context Retention")
@@ -260,6 +368,11 @@ class TripPlanningStrategyTest:
             "conversation_flow": [],
         }
 
+        # Prepare headers with auth token
+        headers = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
         print("\n📝 Starting multi-turn conversation test...")
 
         # Turn 1: Initial vague request
@@ -270,8 +383,9 @@ class TripPlanningStrategyTest:
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response1 = await client.post(
-                    f"{self.base_url}/api/v1/chat",
+                    f"{self.base_url}/api/v1/chat/chat",
                     json={"message": turn1_prompt},
+                    headers=headers,
                 )
 
                 if response1.status_code == 200:
@@ -298,8 +412,9 @@ class TripPlanningStrategyTest:
                         payload2["conversation_id"] = conversation_id
 
                     response2 = await client.post(
-                        f"{self.base_url}/api/v1/chat",
+                        f"{self.base_url}/api/v1/chat/chat",
                         json=payload2,
+                        headers=headers,
                     )
 
                     if response2.status_code == 200:
@@ -325,8 +440,9 @@ class TripPlanningStrategyTest:
                             payload3["conversation_id"] = conversation_id
 
                         response3 = await client.post(
-                            f"{self.base_url}/api/v1/chat",
+                            f"{self.base_url}/api/v1/chat/chat",
                             json=payload3,
+                            headers=headers,
                         )
 
                         if response3.status_code == 200:
@@ -414,7 +530,7 @@ class TripPlanningStrategyTest:
             return context_result
 
     async def validate_mcp_tools_integration(
-        self, task_id: str, itinerary_id: str
+        self, task_id: str, itinerary_id: str, access_token: str | None = None
     ) -> dict[str, Any]:
         """Validate MCP tools integration status."""
         print("\n" + "=" * 80)
@@ -430,6 +546,11 @@ class TripPlanningStrategyTest:
             "FallbackSystem": {"used": False, "status": "not_checked"},
         }
 
+        # Prepare headers with auth token
+        headers = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
         # Wait for task completion and check itinerary
         print("\n⏳ Waiting for task completion...")
 
@@ -440,7 +561,8 @@ class TripPlanningStrategyTest:
                     await asyncio.sleep(TASK_STATUS_POLL_INTERVAL)
 
                     task_response = await client.get(
-                        f"{self.base_url}/api/v1/tasks/{task_id}"
+                        f"{self.base_url}/api/v1/tasks/{task_id}",
+                        headers=headers,
                     )
 
                     if task_response.status_code == 200:
@@ -457,7 +579,8 @@ class TripPlanningStrategyTest:
 
                             # Get itinerary details
                             itinerary_response = await client.get(
-                                f"{self.base_url}/api/v1/itineraries/{itinerary_id}"
+                                f"{self.base_url}/api/v1/itineraries/{itinerary_id}",
+                                headers=headers,
                             )
 
                             if itinerary_response.status_code == 200:
@@ -608,7 +731,7 @@ class TripPlanningStrategyTest:
             return tools_status
 
     async def validate_itinerary_completeness(
-        self, itinerary_id: str
+        self, itinerary_id: str, access_token: str | None = None
     ) -> dict[str, Any]:
         """Validate itinerary completeness."""
         print("\n" + "=" * 80)
@@ -626,10 +749,16 @@ class TripPlanningStrategyTest:
             "completeness_score": 0.0,
         }
 
+        # Prepare headers with auth token
+        headers = {}
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.get(
-                    f"{self.base_url}/api/v1/itineraries/{itinerary_id}"
+                    f"{self.base_url}/api/v1/itineraries/{itinerary_id}",
+                    headers=headers,
                 )
 
                 if response.status_code == 200:
@@ -802,8 +931,15 @@ class TripPlanningStrategyTest:
             self.generate_test_report()
             return
 
+        # Step 1.5: Authenticate
+        access_token = await self.authenticate()
+        if not access_token:
+            print("❌ Authentication failed. Cannot continue.")
+            self.generate_test_report()
+            return
+
         # Step 2: Test trip generation request
-        response_data = await self.test_trip_generation_request()
+        response_data = await self.test_trip_generation_request(access_token=access_token)
         if not response_data:
             self.generate_test_report()
             return
@@ -819,23 +955,28 @@ class TripPlanningStrategyTest:
             self.generate_test_report()
             return
 
-        # Step 3: Try WebSocket tracking (optional)
+        # Step 3: Try WebSocket tracking (optional - with short timeout)
         print("\n💡 Testing WebSocket progress tracking (optional feature)...")
-        ws_result = await self.track_progress_via_websocket(task_id)
+        ws_result = await self.track_progress_via_websocket(task_id, timeout=15)  # Short timeout
+        
+        # Even if WebSocket fails, continue with polling-based validation
+        if not ws_result.get("final_status"):
+            print("\n💡 WebSocket didn't receive final status, using polling fallback...")
+            await self._poll_task_status(task_id, timeout=120)  # Poll until completion
         
         # Step 3b: Validate MCP tools (use REST API tracking)
         tools_status = await self.validate_mcp_tools_integration(
-            task_id, itinerary_id
+            task_id, itinerary_id, access_token=access_token
         )
         self.test_results["mcp_tools_status"] = tools_status
 
         # Step 4: Validate completeness
-        completeness = await self.validate_itinerary_completeness(itinerary_id)
+        completeness = await self.validate_itinerary_completeness(itinerary_id, access_token=access_token)
         self.test_results["itinerary_completeness"] = completeness
 
         # Step 5: Test context retention
         print("\n💡 Testing context retention (optional feature)...")
-        context_result = await self.test_context_retention()
+        context_result = await self.test_context_retention(access_token=access_token)
 
         # Step 6: Generate report
         self.generate_test_report()

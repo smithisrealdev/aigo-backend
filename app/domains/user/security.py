@@ -1,32 +1,35 @@
-"""Password hashing utilities using passlib with bcrypt.
+"""Password hashing utilities using bcrypt.
 
 This module provides secure password hashing and verification
-using the bcrypt algorithm via passlib.
+using the bcrypt algorithm directly.
 """
 
-from passlib.context import CryptContext
-
-# Configure passlib to use bcrypt as the default hashing scheme
-# - bcrypt: Industry standard, secure, and slow (good for passwords)
-# - deprecated="auto": Automatically upgrade hashes if scheme changes
-pwd_context = CryptContext(
-    schemes=["bcrypt"],
-    deprecated="auto",
-    bcrypt__rounds=12,  # Cost factor (2^12 iterations)
-)
+import bcrypt
 
 
 class PasswordHasher:
     """Handles password hashing and verification using bcrypt.
     
     This class provides a clean interface for password operations
-    using passlib's bcrypt implementation.
+    using bcrypt directly (avoiding passlib Python 3.14 issues).
     
     Example:
         hasher = PasswordHasher()
         hashed = hasher.hash("my_secure_password")
         is_valid = hasher.verify("my_secure_password", hashed)
     """
+
+    @staticmethod
+    def _truncate_password(password: str) -> bytes:
+        """Truncate password to 72 bytes (bcrypt limit).
+        
+        Args:
+            password: The plain text password
+            
+        Returns:
+            Password encoded as bytes, truncated to 72 bytes
+        """
+        return password.encode('utf-8')[:72]
 
     @staticmethod
     def hash(password: str) -> str:
@@ -38,7 +41,11 @@ class PasswordHasher:
         Returns:
             The bcrypt hashed password string
         """
-        return pwd_context.hash(password)
+        # Truncate to 72 bytes (bcrypt limit)
+        truncated = PasswordHasher._truncate_password(password)
+        salt = bcrypt.gensalt(rounds=12)
+        hashed = bcrypt.hashpw(truncated, salt)
+        return hashed.decode('utf-8')
 
     @staticmethod
     def verify(plain_password: str, hashed_password: str) -> bool:
@@ -51,14 +58,16 @@ class PasswordHasher:
         Returns:
             True if the password matches, False otherwise
         """
-        return pwd_context.verify(plain_password, hashed_password)
+        # Truncate to 72 bytes (bcrypt limit)
+        truncated = PasswordHasher._truncate_password(plain_password)
+        return bcrypt.checkpw(truncated, hashed_password.encode('utf-8'))
 
     @staticmethod
     def needs_rehash(hashed_password: str) -> bool:
         """Check if a password hash needs to be rehashed.
         
-        This is useful when upgrading the hashing algorithm
-        or changing the cost factor.
+        Note: With direct bcrypt usage, we check the cost factor.
+        Returns True if cost factor is less than 12.
         
         Args:
             hashed_password: The existing hash to check
@@ -66,7 +75,15 @@ class PasswordHasher:
         Returns:
             True if the hash should be regenerated
         """
-        return pwd_context.needs_update(hashed_password)
+        try:
+            # bcrypt hash format: $2b$12$... where 12 is the cost factor
+            parts = hashed_password.split('$')
+            if len(parts) >= 3:
+                cost = int(parts[2])
+                return cost < 12
+        except (ValueError, IndexError):
+            pass
+        return False
 
 
 # Convenience functions for direct usage
