@@ -928,12 +928,25 @@ async def itinerary_generation_node(state: AgentState) -> dict:
         }
 
 
+async def _batch_create_activities(
+    raw_activities: list[dict],
+    city: str,
+    gathered: GatheredData | None,
+) -> list[AIActivity]:
+    """Create multiple AIActivities concurrently for better performance."""
+    tasks = [
+        _create_ai_activity(raw_activity, city, gathered)
+        for raw_activity in raw_activities
+    ]
+    return await asyncio.gather(*tasks)
+
+
 async def _parse_and_enhance_daily_plans(
     llm_response: str,
     intent: ExtractedIntent,
     gathered: GatheredData | None,
 ) -> list[AIDailyPlan]:
-    """Parse LLM response and enhance with additional details."""
+    """Parse LLM response and enhance with additional details including location enrichment."""
     import json
 
     daily_plans = []
@@ -952,14 +965,13 @@ async def _parse_and_enhance_daily_plans(
             day_number = i + 1
             plan_date = intent.start_date + timedelta(days=i)
 
-            activities = []
-            for raw_activity in raw_plan.get("activities", []):
-                activity = await _create_ai_activity(
-                    raw_activity,
-                    intent.destination_city,
-                    gathered,
-                )
-                activities.append(activity)
+            # Use batch processing for better performance
+            raw_activities = raw_plan.get("activities", [])
+            activities = await _batch_create_activities(
+                raw_activities,
+                intent.destination_city,
+                gathered,
+            )
 
             # Add transit details between activities
             activities = await _add_transit_details(activities, intent.destination_city)
@@ -994,12 +1006,115 @@ async def _parse_and_enhance_daily_plans(
     return daily_plans
 
 
+async def _enrich_location_with_places(
+    activity_title: str,
+    location_hint: str,
+    city: str,
+    address_hint: str | None = None,
+) -> LocationInfo:
+    """
+    Enrich location information using Google Places API.
+    
+    Searches for the place and retrieves full details including:
+    - Proper name
+    - Full address
+    - Coordinates (lat/lng)
+    - Google Place ID
+    - Rating, reviews, price level
+    - Opening hours
+    - Phone, website
+    
+    Args:
+        activity_title: Activity/place name to search
+        location_hint: Location string (could be address or place name)
+        city: City name for search context
+        address_hint: Optional address for better matching
+        
+    Returns:
+        Enriched LocationInfo with data from Google Places
+    """
+    try:
+        tool = GoogleMapsTransitTool.place_search
+        
+        # Try different search strategies
+        search_queries = [
+            f"{activity_title} {city}",
+            f"{location_hint} {city}" if location_hint != activity_title else None,
+            activity_title,
+        ]
+        
+        # Filter out None queries
+        search_queries = [q for q in search_queries if q]
+        
+        place_data = None
+        
+        for query in search_queries:
+            try:
+                results = await tool._arun(query=query, radius=10000)
+                if results and len(results) > 0:
+                    place_data = results[0]
+                    break
+            except Exception as search_error:
+                logger.warning(f"Place search for '{query}' failed: {search_error}")
+                continue
+        
+        if place_data:
+            # Extract location coordinates
+            lat = place_data.get("location", {}).get("lat", 0.0)
+            lng = place_data.get("location", {}).get("lng", 0.0)
+            
+            # Try to get more details using place_id
+            place_id = place_data.get("place_id")
+            details = None
+            
+            if place_id:
+                try:
+                    from app.domains.itinerary.tools.google_maps import GoogleMapsClient
+                    client = GoogleMapsClient()
+                    details = await client.get_place_details(place_id)
+                except Exception as detail_error:
+                    logger.warning(f"Failed to get place details: {detail_error}")
+            
+            # Build Google Maps URL
+            google_maps_url = None
+            if place_id:
+                google_maps_url = f"https://www.google.com/maps/place/?q=place_id:{place_id}"
+            elif lat and lng:
+                google_maps_url = f"https://www.google.com/maps/@{lat},{lng},17z"
+            
+            return LocationInfo(
+                name=place_data.get("name", activity_title),
+                address=place_data.get("formatted_address", address_hint),
+                latitude=lat,
+                longitude=lng,
+                google_place_id=place_id,
+                google_maps_url=google_maps_url,
+                rating=place_data.get("rating"),
+                review_count=place_data.get("user_ratings_total"),
+                price_level=place_data.get("price_level"),
+                phone=details.phone if details else None,
+                website=details.website if details else None,
+                opening_hours=details.opening_hours if details else None,
+            )
+            
+    except Exception as e:
+        logger.warning(f"Location enrichment failed for '{activity_title}': {e}")
+    
+    # Fallback to basic location info
+    return LocationInfo(
+        name=activity_title if activity_title and activity_title != "Activity" else location_hint,
+        address=address_hint or location_hint,
+        latitude=0.0,
+        longitude=0.0,
+    )
+
+
 async def _create_ai_activity(
     raw_activity: dict,
     city: str,
     gathered: GatheredData | None,
 ) -> AIActivity:
-    """Create AIActivity from raw LLM output."""
+    """Create AIActivity from raw LLM output with enriched location data."""
     # Parse time
     time_str = raw_activity.get("time", "10:00")
     try:
@@ -1012,14 +1127,32 @@ async def _create_ai_activity(
         datetime.combine(date.today(), start_time) + timedelta(minutes=duration)
     ).time()
 
-    # Get location info (simplified - would use Google Places in production)
-    location = LocationInfo(
-        name=raw_activity.get("location", raw_activity.get("title", "Unknown")),
-        address=raw_activity.get("address"),
-        latitude=raw_activity.get("lat", 0.0),
-        longitude=raw_activity.get("lng", 0.0),
-        google_place_id=raw_activity.get("place_id"),
+    # Get activity title - prefer meaningful name over "Activity"
+    activity_title = raw_activity.get("title", "Activity")
+    location_hint = raw_activity.get("location", raw_activity.get("title", "Unknown"))
+    address_hint = raw_activity.get("address")
+    
+    # Extract place name from location if title is generic
+    if activity_title == "Activity" and location_hint:
+        # Try to extract place name from address-like location
+        # e.g., "Tsukiji Outer Market, 4 Chome-16-2 Tsukiji..." -> "Tsukiji Outer Market"
+        if "," in location_hint:
+            potential_name = location_hint.split(",")[0].strip()
+            # Check if it looks like a place name (not just a number)
+            if potential_name and not potential_name[0].isdigit():
+                activity_title = potential_name
+    
+    # Enrich location with Google Places API
+    location = await _enrich_location_with_places(
+        activity_title=activity_title,
+        location_hint=location_hint,
+        city=city,
+        address_hint=address_hint,
     )
+    
+    # Update title if we got a better name from Places API
+    if activity_title == "Activity" and location.name and location.name != "Unknown":
+        activity_title = location.name
 
     # Map category
     category_map = {
@@ -1040,7 +1173,7 @@ async def _create_ai_activity(
     category = ActivityCategory(category_map.get(category_str, "other"))
 
     return AIActivity(
-        title=raw_activity.get("title", "Activity"),
+        title=activity_title,
         description=raw_activity.get("description", ""),
         category=category,
         start_time=start_time,
