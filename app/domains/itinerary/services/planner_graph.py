@@ -1416,6 +1416,8 @@ async def monetization_node(state: AgentState) -> dict:
     Add affiliate booking links from Travelpayouts.
     
     Injects monetization opportunities into the itinerary.
+    Always provides booking options - with affiliate links when possible,
+    or fallback search links when APIs are unavailable.
     """
     intent = state["intent"]
     gathered = state["gathered_data"]
@@ -1434,37 +1436,83 @@ async def monetization_node(state: AgentState) -> dict:
         )
 
     booking_options = []
+    
+    # Helper to generate fallback search URLs
+    def get_fallback_flight_url(origin: str, destination: str, date: str) -> str:
+        return f"https://www.google.com/travel/flights?q=flights%20from%20{origin}%20to%20{destination}%20on%20{date}"
+    
+    def get_fallback_hotel_url(location: str, checkin: str, checkout: str) -> str:
+        return f"https://www.google.com/travel/hotels/{location}?dates={checkin}%20to%20{checkout}"
 
+    # Flight booking options
     try:
-        # Generate flight affiliate links
+        flight_affiliate_url = ""
+        
         if intent.origin_city:
-            flight_tool = TravelpayoutsTool.flight_link
-            flight_link = await flight_tool._arun(
-                origin=_get_airport_code(intent.origin_city),
-                destination=_get_airport_code(intent.destination_city),
-                departure_date=intent.start_date.isoformat(),
-                return_date=intent.end_date.isoformat(),
-                adults=intent.travelers_count,
-                currency=intent.budget_currency,
-            )
+            try:
+                flight_tool = TravelpayoutsTool.flight_link
+                flight_link = await flight_tool._arun(
+                    origin=_get_airport_code(intent.origin_city),
+                    destination=_get_airport_code(intent.destination_city),
+                    departure_date=intent.start_date.isoformat(),
+                    return_date=intent.end_date.isoformat(),
+                    adults=intent.travelers_count,
+                    currency=intent.budget_currency,
+                )
+                flight_affiliate_url = flight_link.get("affiliate_url", "")
+            except Exception as flight_err:
+                logger.warning(f"Flight affiliate link failed: {flight_err}")
+                flight_affiliate_url = get_fallback_flight_url(
+                    intent.origin_city,
+                    intent.destination_city,
+                    intent.start_date.isoformat(),
+                )
 
-            # Create booking option from gathered flight data or generic
+            # Create booking options from Amadeus flight data
             if gathered and gathered.flights:
                 for flight in gathered.flights[:3]:
+                    # Extract carrier info from first segment (Amadeus format)
+                    segments = flight.get("segments", [])
+                    first_segment = segments[0] if segments else {}
+                    last_segment = segments[-1] if segments else {}
+                    
+                    carrier_name = first_segment.get("carrier_name") or first_segment.get("carrier", "Multiple Airlines")
+                    
+                    # Parse departure/arrival times
+                    departure_time = None
+                    arrival_time = None
+                    if first_segment.get("departure_time"):
+                        try:
+                            departure_time = datetime.fromisoformat(first_segment["departure_time"].replace("Z", "+00:00"))
+                        except (ValueError, TypeError):
+                            pass
+                    if last_segment.get("arrival_time"):
+                        try:
+                            arrival_time = datetime.fromisoformat(last_segment["arrival_time"].replace("Z", "+00:00"))
+                        except (ValueError, TypeError):
+                            pass
+                    
                     booking_options.append(
                         BookingOption(
                             booking_type=BookingType.FLIGHT,
-                            provider=flight.get("carrier", "Multiple Airlines"),
+                            provider=carrier_name,
                             price=Decimal(str(flight.get("total_price", 0))),
-                            currency=intent.budget_currency,
-                            title=f"Flights to {intent.destination_city}",
-                            departure_time=datetime.fromisoformat(flight["segments"][0]["departure_time"]) if flight.get("segments") else None,
-                            arrival_time=datetime.fromisoformat(flight["segments"][-1]["arrival_time"]) if flight.get("segments") else None,
+                            currency=flight.get("currency", intent.budget_currency),
+                            title=f"{intent.origin_city} → {intent.destination_city}",
+                            description=f"{carrier_name} • {flight.get('stops', 0)} stop(s) • {flight.get('total_duration', '')}",
+                            departure_time=departure_time,
+                            arrival_time=arrival_time,
+                            departure_airport=first_segment.get("departure_airport"),
+                            arrival_airport=last_segment.get("arrival_airport"),
+                            airline=carrier_name,
+                            flight_number=first_segment.get("flight_number"),
                             stops=flight.get("stops", 0),
-                            affiliate_url=flight_link.get("affiliate_url", ""),
+                            cabin_class=flight.get("cabin_class", "ECONOMY"),
+                            affiliate_url=flight_affiliate_url,
                         )
                     )
             else:
+                # Always add a search option for flights
                 booking_options.append(
                     BookingOption(
                         booking_type=BookingType.FLIGHT,
@@ -1472,37 +1520,99 @@ async def monetization_node(state: AgentState) -> dict:
                         price=Decimal("0"),
                         currency=intent.budget_currency,
                         title=f"Search flights to {intent.destination_city}",
-                        affiliate_url=flight_link.get("affiliate_url", ""),
+                        description=f"From {intent.origin_city} • Compare prices from multiple airlines",
+                        affiliate_url=flight_affiliate_url or get_fallback_flight_url(
+                            intent.origin_city,
+                            intent.destination_city,
+                            intent.start_date.isoformat(),
+                        ),
                     )
                 )
+    except Exception as e:
+        logger.warning(f"Flight booking options failed: {e}")
+        # Add fallback flight option
+        if intent.origin_city:
+            booking_options.append(
+                BookingOption(
+                    booking_type=BookingType.FLIGHT,
+                    provider="Multiple Airlines",
+                    price=Decimal("0"),
+                    currency=intent.budget_currency,
+                    title=f"Search flights to {intent.destination_city}",
+                    description=f"From {intent.origin_city}",
+                    affiliate_url=get_fallback_flight_url(
+                        intent.origin_city,
+                        intent.destination_city,
+                        intent.start_date.isoformat(),
+                    ),
+                )
+            )
 
-        # Generate hotel affiliate links
-        hotel_tool = TravelpayoutsTool.hotel_link
-        hotel_link = await hotel_tool._arun(
-            location=intent.destination_city,
-            check_in_date=intent.start_date.isoformat(),
-            check_out_date=intent.end_date.isoformat(),
-            adults=intent.travelers_count,
-            currency=intent.budget_currency,
-        )
+    # Hotel booking options
+    try:
+        hotel_affiliate_url = ""
+        
+        try:
+            hotel_tool = TravelpayoutsTool.hotel_link
+            hotel_link = await hotel_tool._arun(
+                location=intent.destination_city,
+                check_in_date=intent.start_date.isoformat(),
+                check_out_date=intent.end_date.isoformat(),
+                adults=intent.travelers_count,
+                currency=intent.budget_currency,
+            )
+            hotel_affiliate_url = hotel_link.get("affiliate_url", "")
+        except Exception as hotel_err:
+            logger.warning(f"Hotel affiliate link failed: {hotel_err}")
+            hotel_affiliate_url = get_fallback_hotel_url(
+                intent.destination_city,
+                intent.start_date.isoformat(),
+                intent.end_date.isoformat(),
+            )
 
+        # Create booking options from Amadeus hotel data
         if gathered and gathered.hotels:
             for hotel in gathered.hotels[:3]:
+                # Amadeus HotelOffer fields: name, chain_code, star_rating, total_price, price_per_night, address, amenities
+                star_rating = hotel.get("star_rating") or 3
+                stars_display = "⭐" * star_rating
+                
+                # Build description with available info
+                desc_parts = [stars_display]
+                if hotel.get("room_type"):
+                    desc_parts.append(hotel.get("room_type"))
+                desc_parts.append(f"{intent.duration_days} nights")
+                if hotel.get("board_type"):
+                    board_display = {
+                        "ROOM_ONLY": "Room only",
+                        "BREAKFAST": "Breakfast included",
+                        "HALF_BOARD": "Half board",
+                        "FULL_BOARD": "Full board",
+                    }.get(hotel.get("board_type"), hotel.get("board_type"))
+                    desc_parts.append(board_display)
+                
                 booking_options.append(
                     BookingOption(
                         booking_type=BookingType.HOTEL,
-                        provider=hotel.get("chain_code", "Hotel"),
+                        provider=hotel.get("chain_code") or hotel.get("name", "Hotel"),
                         price=Decimal(str(hotel.get("total_price", 0))),
                         price_per_night=Decimal(str(hotel.get("price_per_night", 0))),
-                        currency=intent.budget_currency,
+                        currency=hotel.get("currency", intent.budget_currency),
                         title=hotel.get("name", "Hotel"),
-                        hotel_stars=hotel.get("star_rating"),
+                        description=" • ".join(desc_parts),
+                        rating=None,  # Amadeus doesn't provide user ratings
+                        hotel_stars=star_rating,
                         check_in_date=intent.start_date,
                         check_out_date=intent.end_date,
-                        affiliate_url=hotel_link.get("affiliate_url", ""),
+                        room_type=hotel.get("room_type"),
+                        amenities=hotel.get("amenities"),
+                        is_refundable=hotel.get("cancellation_policy") == "REFUNDABLE" if hotel.get("cancellation_policy") else None,
+                        cancellation_policy=hotel.get("cancellation_policy"),
+                        affiliate_url=hotel_affiliate_url,
                     )
                 )
         else:
+            # Always add a search option for hotels
             booking_options.append(
                 BookingOption(
                     booking_type=BookingType.HOTEL,
@@ -1510,15 +1620,56 @@ async def monetization_node(state: AgentState) -> dict:
                     price=Decimal("0"),
                     currency=intent.budget_currency,
                     title=f"Search hotels in {intent.destination_city}",
+                    description=f"{intent.duration_days} nights • Compare prices",
                     check_in_date=intent.start_date,
                     check_out_date=intent.end_date,
-                    affiliate_url=hotel_link.get("affiliate_url", ""),
+                    affiliate_url=hotel_affiliate_url or get_fallback_hotel_url(
+                        intent.destination_city,
+                        intent.start_date.isoformat(),
+                        intent.end_date.isoformat(),
+                    ),
                 )
             )
-
     except Exception as e:
-        logger.warning(f"Monetization failed: {e}")
-        # Continue without affiliate links
+        logger.warning(f"Hotel booking options failed: {e}")
+        # Add fallback hotel option
+        booking_options.append(
+            BookingOption(
+                booking_type=BookingType.HOTEL,
+                provider="Multiple Hotels",
+                price=Decimal("0"),
+                currency=intent.budget_currency,
+                title=f"Search hotels in {intent.destination_city}",
+                description=f"{intent.duration_days} nights",
+                check_in_date=intent.start_date,
+                check_out_date=intent.end_date,
+                affiliate_url=get_fallback_hotel_url(
+                    intent.destination_city,
+                    intent.start_date.isoformat(),
+                    intent.end_date.isoformat(),
+                ),
+            )
+        )
+
+    # Activity booking options (from attractions)
+    try:
+        if gathered and gathered.attractions:
+            for attraction in gathered.attractions[:5]:
+                if attraction.get("rating", 0) >= 4.0:  # Only high-rated attractions
+                    activity_url = f"https://www.google.com/search?q={attraction.get('name', '')}+{intent.destination_city}+tickets"
+                    booking_options.append(
+                        BookingOption(
+                            booking_type=BookingType.ACTIVITY,
+                            provider="Local Activity",
+                            price=Decimal("0"),
+                            currency=intent.budget_currency,
+                            title=attraction.get("name", "Activity"),
+                            description=f"⭐ {attraction.get('rating', 'N/A')} • {attraction.get('formatted_address', '')}",
+                            affiliate_url=activity_url,
+                        )
+                    )
+    except Exception as e:
+        logger.warning(f"Activity booking options failed: {e}")
 
     return {
         "booking_options": booking_options,
