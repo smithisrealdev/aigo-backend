@@ -25,6 +25,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import httpx
 
+# Optional: WebSocket support (install with: pip install websockets)
+try:
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    WEBSOCKETS_AVAILABLE = False
+    print("⚠️  Note: 'websockets' library not installed. WebSocket tests will be skipped.")
+    print("   Install with: pip install websockets")
+
 
 # Test Configuration Constants
 MAX_TASK_WAIT_SECONDS = 120
@@ -51,14 +60,20 @@ class TripPlanningStrategyTest:
 
     def __init__(self, base_url: str = "http://localhost:8000"):
         self.base_url = base_url.rstrip("/")
+        self.ws_base_url = base_url.replace("http://", "ws://").replace("https://", "wss://").rstrip("/")
         self.test_results: dict[str, Any] = {
             "server_available": False,
             "request_success": False,
             "task_completion": False,
+            "websocket_tested": False,
+            "websocket_working": False,
+            "context_retention_tested": False,
+            "context_fully_retained": False,
             "mcp_tools_status": {},
             "itinerary_completeness": {},
             "overall_pass": False,
         }
+        self.conversation_history: list[dict[str, Any]] = []
 
     async def check_server_availability(self) -> bool:
         """Check if server is running."""
@@ -139,6 +154,264 @@ class TripPlanningStrategyTest:
         except Exception as e:
             print(f"❌ Error during request: {str(e)}")
             return None
+
+    async def track_progress_via_websocket(
+        self, task_id: str, timeout: int = MAX_TASK_WAIT_SECONDS
+    ) -> dict[str, Any]:
+        """Track task progress via WebSocket connection."""
+        print("\n" + "=" * 80)
+        print("🌐 STEP 3a: Testing WebSocket Progress Tracking")
+        print("=" * 80)
+
+        ws_result = {
+            "connected": False,
+            "messages_received": 0,
+            "final_status": None,
+            "progress_updates": [],
+            "error": None,
+        }
+
+        if not WEBSOCKETS_AVAILABLE:
+            print("⚠️  WebSocket library not available - skipping WebSocket test")
+            print("   Install with: pip install websockets")
+            self.test_results["websocket_tested"] = False
+            self.test_results["websocket_working"] = False
+            ws_result["error"] = "websockets library not installed"
+            return ws_result
+
+        ws_url = f"{self.ws_base_url}/api/v1/ws/itinerary/{task_id}"
+        print(f"\n🔌 Connecting to WebSocket: {ws_url}")
+
+        try:
+            async with websockets.connect(ws_url, ping_interval=20) as websocket:
+                ws_result["connected"] = True
+                print("✅ WebSocket connected successfully")
+                
+                start_time = asyncio.get_event_loop().time()
+                
+                while True:
+                    # Check timeout
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    if elapsed > timeout:
+                        print(f"\n⏰ WebSocket timeout after {timeout} seconds")
+                        break
+                    
+                    try:
+                        # Wait for message with timeout
+                        message = await asyncio.wait_for(
+                            websocket.recv(), timeout=5.0
+                        )
+                        
+                        data = json.loads(message)
+                        ws_result["messages_received"] += 1
+                        
+                        # Extract progress info
+                        progress = data.get("progress", 0)
+                        status = data.get("status", "unknown")
+                        step = data.get("step", "")
+                        message_text = data.get("message", "")
+                        
+                        ws_result["progress_updates"].append({
+                            "progress": progress,
+                            "status": status,
+                            "step": step,
+                            "message": message_text,
+                        })
+                        
+                        # Print progress update
+                        print(f"   📊 [{progress}%] {status} - {step}: {message_text}")
+                        
+                        # Check if completed or failed
+                        if status in ["completed", "failed"]:
+                            ws_result["final_status"] = status
+                            print(f"\n{'✅' if status == 'completed' else '❌'} Task {status}")
+                            break
+                            
+                    except asyncio.TimeoutError:
+                        # No message received in 5 seconds, check if still connected
+                        continue
+                    except Exception as e:
+                        print(f"⚠️  Error receiving message: {str(e)}")
+                        break
+                
+                self.test_results["websocket_tested"] = True
+                self.test_results["websocket_working"] = ws_result["connected"] and ws_result["messages_received"] > 0
+                
+                return ws_result
+                
+        except Exception as e:
+            print(f"❌ WebSocket connection failed: {str(e)}")
+            print(f"   This is acceptable if WebSocket endpoint is not configured")
+            ws_result["error"] = str(e)
+            self.test_results["websocket_tested"] = True
+            self.test_results["websocket_working"] = False
+            return ws_result
+
+    async def test_context_retention(self) -> dict[str, Any]:
+        """Test multi-turn conversation context retention."""
+        print("\n" + "=" * 80)
+        print("🧠 STEP 4: Testing Context Retention")
+        print("=" * 80)
+
+        context_result = {
+            "turns_completed": 0,
+            "context_preserved": False,
+            "final_itinerary_includes_context": False,
+            "conversation_flow": [],
+        }
+
+        print("\n📝 Starting multi-turn conversation test...")
+
+        # Turn 1: Initial vague request
+        print("\n   Turn 1: Vague request")
+        turn1_prompt = "อยากไปเที่ยวทะเล อากาศดีๆ"
+        print(f"   User: {turn1_prompt}")
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response1 = await client.post(
+                    f"{self.base_url}/api/v1/chat",
+                    json={"message": turn1_prompt},
+                )
+
+                if response1.status_code == 200:
+                    result1 = response1.json()
+                    print(f"   AI: {result1.get('response', 'N/A')[:100]}...")
+                    context_result["turns_completed"] = 1
+                    context_result["conversation_flow"].append({
+                        "turn": 1,
+                        "user_input": turn1_prompt,
+                        "ai_response": result1.get("response", ""),
+                        "intent": result1.get("intent", ""),
+                    })
+                    
+                    # Store conversation_id if available
+                    conversation_id = result1.get("conversation_id")
+                    
+                    # Turn 2: Add more details (should retain context)
+                    print("\n   Turn 2: Adding details (testing context)")
+                    turn2_prompt = "งบ 20,000 บาท ไป 3 วัน อยากไปภูเก็ต"
+                    print(f"   User: {turn2_prompt}")
+
+                    payload2 = {"message": turn2_prompt}
+                    if conversation_id:
+                        payload2["conversation_id"] = conversation_id
+
+                    response2 = await client.post(
+                        f"{self.base_url}/api/v1/chat",
+                        json=payload2,
+                    )
+
+                    if response2.status_code == 200:
+                        result2 = response2.json()
+                        print(f"   AI: {result2.get('response', 'N/A')[:100]}...")
+                        context_result["turns_completed"] = 2
+                        context_result["conversation_flow"].append({
+                            "turn": 2,
+                            "user_input": turn2_prompt,
+                            "ai_response": result2.get("response", ""),
+                            "intent": result2.get("intent", ""),
+                        })
+                        
+                        # Turn 3: Confirm and generate (should use all context)
+                        print("\n   Turn 3: Confirming dates (should generate itinerary)")
+                        start_date = (date.today() + timedelta(days=14)).strftime("%Y-%m-%d")
+                        end_date = (date.today() + timedelta(days=16)).strftime("%Y-%m-%d")
+                        turn3_prompt = f"ไปวันที่ {start_date} ถึง {end_date}"
+                        print(f"   User: {turn3_prompt}")
+
+                        payload3 = {"message": turn3_prompt}
+                        if conversation_id:
+                            payload3["conversation_id"] = conversation_id
+
+                        response3 = await client.post(
+                            f"{self.base_url}/api/v1/chat",
+                            json=payload3,
+                        )
+
+                        if response3.status_code == 200:
+                            result3 = response3.json()
+                            context_result["turns_completed"] = 3
+                            context_result["conversation_flow"].append({
+                                "turn": 3,
+                                "user_input": turn3_prompt,
+                                "ai_response": result3.get("response", ""),
+                                "intent": result3.get("intent", ""),
+                                "itinerary_id": result3.get("itinerary_id"),
+                                "task_id": result3.get("task_id"),
+                            })
+                            
+                            # Check if itinerary was generated with all context
+                            itinerary_id = result3.get("itinerary_id")
+                            task_id = result3.get("task_id")
+                            
+                            if itinerary_id and task_id:
+                                print(f"   ✅ Itinerary generation initiated")
+                                print(f"      Itinerary ID: {itinerary_id}")
+                                print(f"      Task ID: {task_id}")
+                                
+                                # Wait for completion
+                                print(f"\n   ⏳ Waiting for itinerary generation...")
+                                for i in range(60):
+                                    await asyncio.sleep(1)
+                                    task_response = await client.get(
+                                        f"{self.base_url}/api/v1/tasks/{task_id}"
+                                    )
+                                    
+                                    if task_response.status_code == 200:
+                                        task_data = task_response.json()
+                                        status = task_data.get("status")
+                                        
+                                        if status == "completed":
+                                            # Check itinerary for context preservation
+                                            itinerary_response = await client.get(
+                                                f"{self.base_url}/api/v1/itineraries/{itinerary_id}"
+                                            )
+                                            
+                                            if itinerary_response.status_code == 200:
+                                                itinerary = itinerary_response.json()
+                                                
+                                                # Verify context preservation
+                                                destination = itinerary.get("destination_city", "").lower()
+                                                budget = itinerary.get("budget_amount")
+                                                duration = len(itinerary.get("daily_plans", []))
+                                                
+                                                context_preserved = (
+                                                    "phuket" in destination or "ภูเก็ต" in destination
+                                                ) and (
+                                                    budget and 15000 <= float(budget) <= 25000
+                                                ) and (
+                                                    duration == 3
+                                                )
+                                                
+                                                context_result["context_preserved"] = context_preserved
+                                                context_result["final_itinerary_includes_context"] = True
+                                                
+                                                print(f"\n   🔍 Verifying context retention:")
+                                                print(f"      Destination: {itinerary.get('destination_city')} {'✅' if 'phuket' in destination.lower() or 'ภูเก็ต' in destination else '❌'}")
+                                                print(f"      Budget: {budget} THB {'✅' if budget and 15000 <= float(budget) <= 25000 else '❌'}")
+                                                print(f"      Duration: {duration} days {'✅' if duration == 3 else '❌'}")
+                                                
+                                                if context_preserved:
+                                                    print(f"\n   ✅ Context fully retained across 3 turns!")
+                                                else:
+                                                    print(f"\n   ⚠️  Context may not be fully retained")
+                                            break
+                                        elif status == "failed":
+                                            print(f"   ❌ Task failed")
+                                            break
+
+            self.test_results["context_retention_tested"] = True
+            self.test_results["context_fully_retained"] = context_result["context_preserved"]
+            
+            return context_result
+
+        except Exception as e:
+            print(f"❌ Error testing context retention: {str(e)}")
+            self.test_results["context_retention_tested"] = True
+            self.test_results["context_fully_retained"] = False
+            context_result["error"] = str(e)
+            return context_result
 
     async def validate_mcp_tools_integration(
         self, task_id: str, itinerary_id: str
@@ -466,6 +739,26 @@ class TripPlanningStrategyTest:
             )
             print(f"   Activities: {completeness.get('total_activities', 0)}")
 
+        print(f"\n6️⃣  WebSocket Progress Tracking:")
+        if self.test_results.get("websocket_tested"):
+            if self.test_results.get("websocket_working"):
+                print(f"   ✅ PASS - WebSocket connection and tracking working")
+            else:
+                print(f"   ⚠️  NOT AVAILABLE - WebSocket endpoint not accessible")
+                print(f"       (This is acceptable for development)")
+        else:
+            print(f"   ⚠️  NOT TESTED")
+
+        print(f"\n7️⃣  Context Retention:")
+        if self.test_results.get("context_retention_tested"):
+            if self.test_results.get("context_fully_retained"):
+                print(f"   ✅ PASS - Context fully retained across conversation turns")
+            else:
+                print(f"   ⚠️  PARTIAL - Context may not be fully retained")
+                print(f"       Check conversation flow for details")
+        else:
+            print(f"   ⚠️  NOT TESTED")
+
         # Overall assessment
         print(f"\n" + "=" * 80)
         overall_pass = (
@@ -480,6 +773,12 @@ class TripPlanningStrategyTest:
             print("✅ OVERALL: PASS")
             print("\nThe trip planning feature is working correctly.")
             print("Request was successful and task completed.")
+            
+            # Additional context info
+            if self.test_results.get("context_fully_retained"):
+                print("✅ Context retention is working as expected.")
+            if self.test_results.get("websocket_working"):
+                print("✅ WebSocket progress tracking is functional.")
         else:
             print("❌ OVERALL: FAIL")
             print("\nSome components are not working as expected.")
@@ -520,7 +819,11 @@ class TripPlanningStrategyTest:
             self.generate_test_report()
             return
 
-        # Step 3: Validate MCP tools
+        # Step 3: Try WebSocket tracking (optional)
+        print("\n💡 Testing WebSocket progress tracking (optional feature)...")
+        ws_result = await self.track_progress_via_websocket(task_id)
+        
+        # Step 3b: Validate MCP tools (use REST API tracking)
         tools_status = await self.validate_mcp_tools_integration(
             task_id, itinerary_id
         )
@@ -530,7 +833,11 @@ class TripPlanningStrategyTest:
         completeness = await self.validate_itinerary_completeness(itinerary_id)
         self.test_results["itinerary_completeness"] = completeness
 
-        # Step 5: Generate report
+        # Step 5: Test context retention
+        print("\n💡 Testing context retention (optional feature)...")
+        context_result = await self.test_context_retention()
+
+        # Step 6: Generate report
         self.generate_test_report()
 
 

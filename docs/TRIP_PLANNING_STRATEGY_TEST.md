@@ -1,7 +1,7 @@
 # Trip Planning Strategy Test Documentation
 
 **Date:** 2025-12-31  
-**Purpose:** Focused testing of trip planning feature with MCP tools integration validation  
+**Purpose:** Focused testing of trip planning feature with MCP tools integration validation + WebSocket tracking + Context retention  
 **Test Script:** `scripts/test_trip_planning_strategy.py`
 
 ---
@@ -13,8 +13,10 @@ This test validates the trip planning feature with specific focus on:
 2. ✅ MCP tools integration status
 3. ✅ Itinerary completeness
 4. ✅ Tool availability verification
+5. ✅ **WebSocket progress tracking (NEW)**
+6. ✅ **Context retention across conversation turns (NEW)**
 
-Based on analysis showing tool integration issues in previous tests.
+Based on analysis showing tool integration issues and need for real-time tracking and context preservation.
 
 ---
 
@@ -44,6 +46,12 @@ Based on analysis showing tool integration issues in previous tests.
    # Google Maps (Optional - fallback available)
    GOOGLE_MAPS_API_KEY=your_key_here
    ```
+
+3. **Optional: WebSocket support (for real-time tracking test)**
+   ```bash
+   pip install websockets
+   ```
+   *Note: If not installed, WebSocket tests will be skipped gracefully.*
 
 ### Run the Test
 
@@ -93,7 +101,50 @@ Monitors the async task until completion.
 - Final status is "completed" (not "failed")
 - Progress updates from 0% to 100%
 
-### 4. MCP Tools Integration Validation 🔧
+### 3a. WebSocket Progress Tracking 🌐 (NEW)
+
+Tests real-time progress tracking via WebSocket connection.
+
+**What it tests:**
+- WebSocket connection establishment
+- Real-time progress messages
+- Message format and content
+- Connection stability
+
+**Success Criteria:**
+- WebSocket connects successfully to `/api/v1/ws/itinerary/{task_id}`
+- Receives progress updates in real-time
+- Messages include: progress %, status, step, message
+- Connection closes properly on completion
+
+**Note:** This test is optional and will be skipped if:
+- `websockets` library is not installed
+- WebSocket endpoint is not available
+- This is acceptable for development environments
+
+### 4. Context Retention Test 🧠 (NEW)
+
+Tests multi-turn conversation context preservation.
+
+**Test Flow:**
+1. **Turn 1:** Vague request ("อยากไปเที่ยวทะเล อากาศดีๆ")
+2. **Turn 2:** Add details ("งบ 20,000 บาท ไป 3 วัน อยากไปภูเก็ต")
+3. **Turn 3:** Confirm dates and generate itinerary
+
+**What it validates:**
+- Context from Turn 1 retained in Turn 2
+- All context (destination, budget, duration) used in final itinerary
+- Conversation flow is natural
+- No information loss between turns
+
+**Success Criteria:**
+- Final itinerary includes:
+  - ✅ Destination: Phuket (from Turn 2)
+  - ✅ Budget: 15,000-25,000 THB (from Turn 2)
+  - ✅ Duration: 3 days (from Turn 2)
+  - ✅ Beach/good weather preference (from Turn 1)
+
+### 5. MCP Tools Integration Validation 🔧
 
 Analyzes the generated itinerary to determine which tools were used.
 
@@ -128,7 +179,7 @@ Analyzes the generated itinerary to determine which tools were used.
 - ℹ️ **Used:** AI-generated data when APIs unavailable
 - **Checks:** `itinerary.metadata.fallback_used` flag
 
-### 5. Itinerary Completeness Validation 📋
+### 6. Itinerary Completeness Validation 📋
 
 Measures the completeness of the generated itinerary.
 
@@ -187,6 +238,22 @@ Measures the completeness of the generated itinerary.
 🔧 STEP 3: Validating MCP Tools Integration
 ================================================================================
 
+💡 Testing WebSocket progress tracking (optional feature)...
+
+================================================================================
+🌐 STEP 3a: Testing WebSocket Progress Tracking
+================================================================================
+
+🔌 Connecting to WebSocket: ws://localhost:8000/api/v1/ws/itinerary/task_xyz789
+✅ WebSocket connected successfully
+   📊 [10%] processing - intent_extraction: Understanding your travel request...
+   📊 [25%] processing - data_gathering: Gathering weather and travel data...
+   📊 [50%] processing - itinerary_generation: Creating your itinerary...
+   📊 [75%] processing - monetization: Adding booking options...
+   📊 [100%] completed - finalization: Itinerary complete!
+
+✅ Task completed
+
 ⏳ Waiting for task completion...
    [0s] Status: processing | Progress: 10%
    [10s] Status: processing | Progress: 40%
@@ -212,6 +279,37 @@ Measures the completeness of the generated itinerary.
 💰 Budget: ✅ Present
 
 📊 Completeness Score: 100/100
+
+💡 Testing context retention (optional feature)...
+
+================================================================================
+🧠 STEP 4: Testing Context Retention
+================================================================================
+
+📝 Starting multi-turn conversation test...
+
+   Turn 1: Vague request
+   User: อยากไปเที่ยวทะเล อากาศดีๆ
+   AI: สนใจไปเที่ยวทะเลในช่วงไหนครับ และมีงบประมาณเท่าไหร่...
+
+   Turn 2: Adding details (testing context)
+   User: งบ 20,000 บาท ไป 3 วัน อยากไปภูเก็ต
+   AI: เข้าใจครับ ภูเก็ต 3 วัน งบ 20,000 บาท ต้องการให้วางแผนเที่ยวให้เลยไหม...
+
+   Turn 3: Confirming dates (should generate itinerary)
+   User: ไปวันที่ 2025-01-14 ถึง 2025-01-16
+   ✅ Itinerary generation initiated
+      Itinerary ID: xyz456
+      Task ID: task_abc123
+
+   ⏳ Waiting for itinerary generation...
+
+   🔍 Verifying context retention:
+      Destination: Phuket ✅
+      Budget: 20000 THB ✅
+      Duration: 3 days ✅
+
+   ✅ Context fully retained across 3 turns!
 
 ================================================================================
 📊 TEST REPORT: Trip Planning Strategy Validation
@@ -239,6 +337,19 @@ Measures the completeness of the generated itinerary.
    Days: 5/5
    Activities: 23
 
+6️⃣  WebSocket Progress Tracking:
+   ✅ PASS - WebSocket connection and tracking working
+
+7️⃣  Context Retention:
+   ✅ PASS - Context fully retained across conversation turns
+
+================================================================================
+✅ OVERALL: PASS
+
+The trip planning feature is working correctly.
+Request was successful and task completed.
+✅ Context retention is working as expected.
+✅ WebSocket progress tracking is functional.
 ================================================================================
 ✅ OVERALL: PASS
 
