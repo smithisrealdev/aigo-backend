@@ -75,8 +75,15 @@ All configuration is managed through environment variables. See `.env.example` f
 ### Required API Keys
 
 - **Amadeus API**: For flight and hotel search
+  - Sign up at: https://developers.amadeus.com/
 - **Google Maps API**: For location and places services
+  - Get API key at: https://console.cloud.google.com/
 - **OpenAI API**: For AI-powered itinerary generation
+  - Get API key at: https://platform.openai.com/
+- **OpenWeatherMap API**: For weather forecasts and conditions
+  - Sign up at: https://openweathermap.org/api
+  - Get API key from: https://home.openweathermap.org/api_keys
+  - Supports Current Weather and 5-day/3-hour Forecast endpoints
 
 ## 📝 API Endpoints
 
