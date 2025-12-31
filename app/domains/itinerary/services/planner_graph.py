@@ -1436,7 +1436,11 @@ async def _enrich_with_images(
             for act_idx, activity in enumerate(day.activities):
                 location_name = activity.location.name if activity.location else activity.title
                 if location_name:
-                    query = f"{location_name} {destination_city}"
+                    # Avoid duplicate city name if already in location_name
+                    if destination_city.lower() in location_name.lower():
+                        query = location_name
+                    else:
+                        query = f"{location_name} {destination_city}"
                     location_queries.append(query)
                     location_map[query] = (day_idx, act_idx)
 

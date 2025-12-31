@@ -7,7 +7,7 @@ Fetches relevant images for locations, activities, and destinations.
 import asyncio
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -53,7 +53,7 @@ def _get_cached_result(cache_key: str) -> ImageSearchResponse | None:
     if cache_key in _image_cache:
         result, cached_at = _image_cache[cache_key]
         ttl = settings.GOOGLE_IMAGE_CACHE_TTL
-        if datetime.now() - cached_at < timedelta(seconds=ttl):
+        if datetime.now(UTC) - cached_at < timedelta(seconds=ttl):
             return result
         else:
             del _image_cache[cache_key]
@@ -62,7 +62,7 @@ def _get_cached_result(cache_key: str) -> ImageSearchResponse | None:
 
 def _set_cached_result(cache_key: str, result: ImageSearchResponse) -> None:
     """Cache the result."""
-    _image_cache[cache_key] = (result, datetime.now())
+    _image_cache[cache_key] = (result, datetime.now(UTC))
 
 
 async def search_images(
@@ -114,14 +114,14 @@ async def search_images(
     }
 
     try:
-        start_time = datetime.now()
+        start_time = datetime.now(UTC)
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
 
-        search_time = (datetime.now() - start_time).total_seconds() * 1000
+        search_time = (datetime.now(UTC) - start_time).total_seconds() * 1000
 
         # Parse results
         images: list[ImageSearchResult] = []

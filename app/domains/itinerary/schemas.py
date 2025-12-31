@@ -1,6 +1,6 @@
 """Pydantic schemas for the Itinerary domain."""
 
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import Enum
 from uuid import UUID
@@ -36,7 +36,7 @@ class LocationImages(BaseModel):
     images: list[LocationImage] = Field(default_factory=list)
 
     # Metadata
-    fetched_at: datetime = Field(default_factory=datetime.now)
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     is_cached: bool = Field(default=False)
     cache_expires_at: datetime | None = None
 
