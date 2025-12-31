@@ -974,6 +974,8 @@ async def _enhance_daily_plans_with_bookings(
     if not daily_plans:
         return daily_plans
     
+    logger.info(f"🛫 _enhance_daily_plans_with_bookings: {len(daily_plans)} days, origin_city={intent.origin_city}")
+    
     enhanced_plans = []
     previous_city = intent.origin_city
     
@@ -1009,7 +1011,13 @@ async def _enhance_daily_plans_with_bookings(
         plan.travel_from = travel_from
         plan.travel_to = travel_to
         
-        # Add flight recommendations on travel days
+        # Check if this is the last day (return flight day)
+        is_last_day = i == len(daily_plans) - 1
+        is_return_day = is_last_day and intent.origin_city
+        
+        logger.info(f"  Day {i+1}: is_travel_day={is_travel_day}, is_last_day={is_last_day}, is_return_day={is_return_day}")
+        
+        # Add flight recommendations on travel days (outbound)
         if is_travel_day and gathered and gathered.flights:
             flight_options = []
             for flight in gathered.flights[:2]:
@@ -1024,15 +1032,61 @@ async def _enhance_daily_plans_with_bookings(
                         provider=carrier_name,
                         price=Decimal(str(flight.get("total_price", 0))),
                         currency=flight.get("currency", intent.budget_currency),
-                        title=f"{travel_from} → {travel_to}",
-                        description=f"{carrier_name} • {flight.get('stops', 0)} stop(s)",
+                        title=f"✈️ {travel_from} → {travel_to}",
+                        description=f"{carrier_name} • {flight.get('stops', 0)} stop(s) • Outbound",
                         affiliate_url="",  # Will be filled by monetization
                     )
                 )
             plan.recommended_flights = flight_options if flight_options else None
         
+        # Add return flight recommendations on the last day
+        if is_return_day:
+            return_flights = []
+            origin = intent.origin_city
+            destination = current_city
+            
+            # Use gathered flights data if available (may contain return flights)
+            if gathered and gathered.flights:
+                for flight in gathered.flights[:2]:
+                    segments = flight.get("segments", [])
+                    first_segment = segments[0] if segments else {}
+                    carrier_name = first_segment.get("carrier_name") or first_segment.get("carrier", "Multiple Airlines")
+                    
+                    return_flights.append(
+                        BookingOption(
+                            booking_type=BookingType.FLIGHT,
+                            provider=carrier_name,
+                            price=Decimal(str(flight.get("total_price", 0))),
+                            currency=flight.get("currency", intent.budget_currency),
+                            title=f"✈️ {destination} → {origin}",
+                            description=f"{carrier_name} • {flight.get('stops', 0)} stop(s) • Return",
+                            affiliate_url="",
+                        )
+                    )
+            
+            # Fallback: Create placeholder return flight recommendation
+            if not return_flights:
+                total_budget = float(intent.budget_amount or 50000)
+                estimated_flight_price = Decimal(str(int(total_budget * 0.15)))  # ~15% of budget
+                
+                return_flights.append(
+                    BookingOption(
+                        booking_type=BookingType.FLIGHT,
+                        provider="Search Flights",
+                        price=estimated_flight_price,
+                        currency=intent.budget_currency,
+                        title=f"✈️ {destination} → {origin}",
+                        description="Click to search return flights",
+                        affiliate_url=f"https://www.skyscanner.com/transport/flights/{destination}/{origin}/{plan.plan_date.strftime('%y%m%d')}/",
+                    )
+                )
+            
+            plan.recommended_flights = return_flights
+            plan.is_travel_day = True
+            plan.travel_from = destination
+            plan.travel_to = origin
+        
         # Add hotel recommendation (for nights staying in this city)
-        is_last_day = i == len(daily_plans) - 1
         if not is_last_day:
             hotel_added = False
             
@@ -1073,7 +1127,7 @@ async def _enhance_daily_plans_with_bookings(
             if not hotel_added:
                 # Estimate nightly budget based on total budget and trip duration
                 nights = len(daily_plans) - 1 if len(daily_plans) > 1 else 1
-                total_budget = intent.budget_amount or 50000
+                total_budget = float(intent.budget_amount or 50000)
                 # Hotels typically ~25-30% of travel budget
                 estimated_nightly = Decimal(str(int(total_budget * 0.25 / nights)))
                 
