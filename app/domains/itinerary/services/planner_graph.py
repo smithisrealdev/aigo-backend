@@ -184,7 +184,7 @@ User Preferences (if provided):
 Extract the following information in JSON format:
 - destination_city: The main city to visit
 - destination_country: The country
-- origin_city: Starting city (if mentioned, otherwise null)
+- origin_city: Starting city (if mentioned, otherwise infer from user preferences/context, or default to "Bangkok" for Thai users)
 - start_date: Trip start date (YYYY-MM-DD format, estimate if not specified)
 - end_date: Trip end date (YYYY-MM-DD format)
 - duration_days: Number of days
@@ -203,6 +203,13 @@ Be intelligent about inferring dates:
 - If user says "next week", calculate from today
 - If user says "5 days", set appropriate start/end dates
 - Default to 30 days from now if no date specified
+
+IMPORTANT for origin_city:
+- If the user explicitly mentions where they're traveling from, use that city
+- If not mentioned but destination is international (different country), try to infer a reasonable origin:
+  - For Thai users (THB currency, Thai language in prompt), default to "Bangkok"
+  - Otherwise, leave as null only if truly uncertain
+- Always provide origin_city when the destination is in a different country for flight search
 
 Return ONLY valid JSON, no markdown."""
 
@@ -345,6 +352,16 @@ async def data_gathering_node(state: AgentState) -> dict:
     if not intent:
         return {"error": "No intent extracted", "current_step": PlannerStep.ERROR}
 
+    # Auto-set origin_city for international trips if not provided
+    # Default to Bangkok for Thai users (THB currency)
+    if not intent.origin_city:
+        # Check if it's an international trip (destination not Thailand)
+        if intent.destination_country and intent.destination_country.lower() not in ["thailand", "ไทย", "th"]:
+            # Default to Bangkok for Thai users
+            if intent.budget_currency == "THB":
+                intent.origin_city = "Bangkok"
+                logger.info(f"Auto-set origin_city to Bangkok for international trip to {intent.destination_country}")
+
     logger.info(f"Gathering data for {intent.destination_city}")
 
     if state.get("progress_callback"):
@@ -479,7 +496,7 @@ async def _search_flights_with_fallback(intent: ExtractedIntent) -> dict:
     if tool_health.should_use_fallback(tool_name):
         logger.warning(f"Skipping {tool_name} due to repeated failures, using fallback")
         result = await generate_flight_fallback(
-            origin=intent.origin_city[:3].upper() if intent.origin_city else "BKK",
+            origin=_get_airport_code(intent.origin_city) if intent.origin_city else "BKK",
             destination=_get_airport_code(intent.destination_city),
             departure_date=intent.start_date.isoformat(),
             return_date=intent.end_date.isoformat(),
@@ -495,7 +512,7 @@ async def _search_flights_with_fallback(intent: ExtractedIntent) -> dict:
     try:
         tool = AmadeusTool.flight_search
         result = await tool._arun(
-            origin=intent.origin_city[:3].upper() if intent.origin_city else "BKK",
+            origin=_get_airport_code(intent.origin_city) if intent.origin_city else "BKK",
             destination=_get_airport_code(intent.destination_city),
             departure_date=intent.start_date.isoformat(),
             return_date=intent.end_date.isoformat(),
@@ -513,7 +530,7 @@ async def _search_flights_with_fallback(intent: ExtractedIntent) -> dict:
 
         # Generate fallback data
         result = await generate_flight_fallback(
-            origin=intent.origin_city[:3].upper() if intent.origin_city else "BKK",
+            origin=_get_airport_code(intent.origin_city) if intent.origin_city else "BKK",
             destination=_get_airport_code(intent.destination_city),
             departure_date=intent.start_date.isoformat(),
             return_date=intent.end_date.isoformat(),

@@ -362,17 +362,20 @@ class WeatherClient(BaseAsyncAPIClient):
             params["lat"] = geo_response["lat"]
             params["lon"] = geo_response["lon"]
 
-        # Use One Call API for daily forecast
-        params["exclude"] = "minutely,hourly,alerts"
-
+        # Use 5-day forecast API first (free tier) - more reliable
+        # /onecall requires subscription
         try:
-            response = await self.get("/onecall", params=params)
-        except APIClientError:
-            # Fallback to 5-day/3-hour forecast
             response = await self.get("/forecast", params=params)
             return self._parse_5day_forecast(response, location, start_date, end_date, units)
-
-        return self._parse_onecall_forecast(response, location, start_date, end_date, units)
+        except APIClientError as e:
+            logger.warning(f"5-day forecast failed: {e}, trying onecall API")
+            # Try One Call API as fallback (requires subscription)
+            params["exclude"] = "minutely,hourly,alerts"
+            try:
+                response = await self.get("/onecall", params=params)
+                return self._parse_onecall_forecast(response, location, start_date, end_date, units)
+            except APIClientError:
+                raise
 
     async def _get_coordinates(self, city: str) -> dict | None:
         """Get coordinates for a city name."""
