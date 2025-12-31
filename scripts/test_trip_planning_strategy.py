@@ -26,6 +26,26 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import httpx
 
 
+# Test Configuration Constants
+MAX_TASK_WAIT_SECONDS = 120
+TASK_STATUS_POLL_INTERVAL = 1
+STATUS_PRINT_INTERVAL = 10
+
+# Completeness Scoring Weights
+SCORE_DAILY_PLANS = 25
+SCORE_ALL_DAYS_PLANNED = 25
+SCORE_HAS_ACTIVITIES = 25
+SCORE_HAS_WEATHER = 15
+SCORE_HAS_BUDGET = 10
+
+# Default Test Prompt
+DEFAULT_TEST_PROMPT = """วางแผนเที่ยวกรุงเทพ 5 วัน 4 คืน จาก {start_date} ถึง {end_date}
+งบประมาณ 25,000 บาท
+สนใจ: วัฒนธรรม, อาหาร, ช้อปปิ้ง
+ประเภท: คู่รัก
+ต้องการข้อมูลสภาพอากาศและรูปภาพสถานที่ด้วย"""
+
+
 class TripPlanningStrategyTest:
     """Strategy test for trip planning feature with MCP tools validation."""
 
@@ -66,24 +86,27 @@ class TripPlanningStrategyTest:
             print(f"   poetry run uvicorn app.main:app --reload")
             return False
 
-    async def test_trip_generation_request(self) -> dict[str, Any] | None:
+    async def test_trip_generation_request(
+        self, custom_prompt: str | None = None
+    ) -> dict[str, Any] | None:
         """Test trip generation request and capture response."""
         print("\n" + "=" * 80)
         print("🧪 STEP 2: Testing Trip Generation Request")
         print("=" * 80)
 
-        # Use Bangkok trip as in the original test
-        start_date = (date.today() + timedelta(days=14)).strftime("%Y-%m-%d")
-        end_date = (date.today() + timedelta(days=18)).strftime("%Y-%m-%d")
-
-        prompt = f"""วางแผนเที่ยวกรุงเทพ 5 วัน 4 คืน จาก {start_date} ถึง {end_date}
-งบประมาณ 25,000 บาท
-สนใจ: วัฒนธรรม, อาหาร, ช้อปปิ้ง
-ประเภท: คู่รัก
-ต้องการข้อมูลสภาพอากาศและรูปภาพสถานที่ด้วย"""
+        # Use custom prompt or default Bangkok trip
+        if custom_prompt:
+            prompt = custom_prompt
+        else:
+            start_date = (date.today() + timedelta(days=14)).strftime("%Y-%m-%d")
+            end_date = (date.today() + timedelta(days=18)).strftime("%Y-%m-%d")
+            prompt = DEFAULT_TEST_PROMPT.format(
+                start_date=start_date, end_date=end_date
+            )
 
         print(f"\n📝 Test Prompt:")
-        print(f"   {prompt.replace(chr(10), chr(10) + '   ')}")
+        # Use proper newline instead of chr(10)
+        print(f"   {prompt.replace('\n', '\n   ')}")
 
         try:
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -140,9 +163,8 @@ class TripPlanningStrategyTest:
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 # Poll task status
-                max_attempts = 120  # 2 minutes
-                for i in range(max_attempts):
-                    await asyncio.sleep(1)
+                for i in range(MAX_TASK_WAIT_SECONDS):
+                    await asyncio.sleep(TASK_STATUS_POLL_INTERVAL)
 
                     task_response = await client.get(
                         f"{self.base_url}/api/v1/tasks/{task_id}"
@@ -153,7 +175,7 @@ class TripPlanningStrategyTest:
                         status = task_data.get("status")
                         progress = task_data.get("progress", 0)
 
-                        if i % 10 == 0:  # Print every 10 seconds
+                        if i % STATUS_PRINT_INTERVAL == 0:
                             print(f"   [{i}s] Status: {status} | Progress: {progress}%")
 
                         if status == "completed":
@@ -303,7 +325,9 @@ class TripPlanningStrategyTest:
                             print(f"\n❌ Task failed: {task_data.get('error')}")
                             return tools_status
 
-                print(f"\n⏰ Timeout waiting for task completion")
+                print(
+                    f"\n⏰ Timeout after {MAX_TASK_WAIT_SECONDS} seconds waiting for task completion"
+                )
                 return tools_status
 
         except Exception as e:
@@ -372,18 +396,18 @@ class TripPlanningStrategyTest:
                         f"💰 Budget: {'✅ Present' if completeness['has_budget'] else '❌ Missing'}"
                     )
 
-                    # Calculate completeness score
+                    # Calculate completeness score using defined weights
                     score = 0
                     if completeness["has_daily_plans"]:
-                        score += 25
+                        score += SCORE_DAILY_PLANS
                     if completeness["days_planned"] == completeness["expected_days"]:
-                        score += 25
+                        score += SCORE_ALL_DAYS_PLANNED
                     if completeness["has_activities"]:
-                        score += 25
+                        score += SCORE_HAS_ACTIVITIES
                     if completeness["has_weather"]:
-                        score += 15
+                        score += SCORE_HAS_WEATHER
                     if completeness["has_budget"]:
-                        score += 10
+                        score += SCORE_HAS_BUDGET
 
                     completeness["completeness_score"] = score
 
