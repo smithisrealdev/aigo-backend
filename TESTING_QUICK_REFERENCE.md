@@ -27,13 +27,15 @@ scripts/run_all_tests.py                    # Master runner (run this!)
 scripts/test_full_itinerary_mcp_tools.py    # Full itinerary test
 scripts/test_conversation_loop.py           # Conversation test
 scripts/test_itinerary_generate_weather.py  # Weather test
+scripts/test_trip_planning_strategy.py      # Strategy test (NEW)
 ```
 
 **Documentation:**
 ```bash
-docs/TESTING_GUIDE.md                    # Complete testing guide
-docs/COMPREHENSIVE_TEST_PROMPTS.md       # 17 test scenarios
-docs/IMPLEMENTATION_SUMMARY_TESTING.md   # What was built
+docs/TESTING_GUIDE.md                       # Complete testing guide
+docs/COMPREHENSIVE_TEST_PROMPTS.md          # 17 test scenarios
+docs/TRIP_PLANNING_STRATEGY_TEST.md         # Strategy test guide (NEW)
+docs/IMPLEMENTATION_SUMMARY_TESTING.md      # What was built
 ```
 
 ---
@@ -57,6 +59,12 @@ docs/IMPLEMENTATION_SUMMARY_TESTING.md   # What was built
 **Run:** `python scripts/test_itinerary_generate_weather.py`  
 **Tests:** Weather inquiry, forecasts, integration  
 **Duration:** ~2-5 minutes
+
+### 4️⃣ Trip Planning Strategy Test (NEW)
+**What:** Focused validation of MCP tools integration  
+**Run:** `python scripts/test_trip_planning_strategy.py`  
+**Tests:** Tool status, itinerary completeness  
+**Duration:** ~2-3 minutes
 
 ---
 
