@@ -1,46 +1,12 @@
 {
-  "server_available": true,
-  "request_success": true,
+  "server_available": false,
+  "request_success": false,
   "task_completion": false,
-  "websocket_tested": true,
-  "websocket_working": true,
-  "context_retention_tested": true,
+  "websocket_tested": false,
+  "websocket_working": false,
+  "context_retention_tested": false,
   "context_fully_retained": false,
-  "mcp_tools_status": {
-    "WeatherTool": {
-      "available": false,
-      "status": "not_checked"
-    },
-    "AmadeusTool": {
-      "available": false,
-      "status": "not_checked"
-    },
-    "GoogleMapsTransitTool": {
-      "available": false,
-      "status": "not_checked"
-    },
-    "GoogleImageSearch": {
-      "available": false,
-      "status": "not_checked"
-    },
-    "TravelpayoutsTool": {
-      "available": false,
-      "status": "not_checked"
-    },
-    "FallbackSystem": {
-      "used": false,
-      "status": "not_checked"
-    }
-  },
-  "itinerary_completeness": {
-    "has_daily_plans": false,
-    "days_planned": 0,
-    "expected_days": 5,
-    "has_activities": false,
-    "total_activities": 0,
-    "has_weather": false,
-    "has_budget": false,
-    "completeness_score": 0.0
-  },
+  "mcp_tools_status": {},
+  "itinerary_completeness": {},
   "overall_pass": false
 }
