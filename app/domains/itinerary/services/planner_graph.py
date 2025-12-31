@@ -941,6 +941,161 @@ async def _batch_create_activities(
     return await asyncio.gather(*tasks)
 
 
+def _detect_city_from_activities(activities: list[AIActivity]) -> str | None:
+    """Detect the primary city from activities based on location names."""
+    if not activities:
+        return None
+    
+    # Check first activity's location for city hints
+    first_activity = activities[0]
+    if first_activity.location and first_activity.location.address:
+        # Try to extract city from address (usually contains city name)
+        address = first_activity.location.address
+        # Common patterns: "..., City, Country" or "..., City Prefecture, Country"
+        parts = [p.strip() for p in address.split(",")]
+        if len(parts) >= 2:
+            # Usually city is second-to-last or third-to-last
+            return parts[-2] if len(parts) >= 2 else parts[-1]
+    
+    return None
+
+
+async def _enhance_daily_plans_with_bookings(
+    daily_plans: list[AIDailyPlan],
+    intent: ExtractedIntent,
+    gathered: GatheredData | None,
+) -> list[AIDailyPlan]:
+    """
+    Enhance daily plans with context-aware booking recommendations.
+    
+    Detects travel days, adds location context, and provides
+    relevant flight/hotel/activity recommendations for each day.
+    """
+    if not daily_plans:
+        return daily_plans
+    
+    enhanced_plans = []
+    previous_city = intent.origin_city
+    
+    for i, plan in enumerate(daily_plans):
+        # Determine the city for this day
+        current_city = intent.destination_city  # Default to main destination
+        
+        # Try to detect city from activities
+        detected_city = _detect_city_from_activities(plan.activities)
+        if detected_city:
+            current_city = detected_city
+        
+        # Check if this is a travel day (city change)
+        is_travel_day = False
+        travel_from = None
+        travel_to = None
+        
+        if i == 0 and intent.origin_city:
+            # First day - traveling from origin to destination
+            is_travel_day = True
+            travel_from = intent.origin_city
+            travel_to = current_city
+        elif previous_city and previous_city.lower() != current_city.lower():
+            # City changed from previous day
+            is_travel_day = True
+            travel_from = previous_city
+            travel_to = current_city
+        
+        # Update plan with location context
+        plan.location_city = current_city
+        plan.location_country = intent.destination_country
+        plan.is_travel_day = is_travel_day
+        plan.travel_from = travel_from
+        plan.travel_to = travel_to
+        
+        # Add flight recommendations on travel days
+        if is_travel_day and gathered and gathered.flights:
+            flight_options = []
+            for flight in gathered.flights[:2]:
+                segments = flight.get("segments", [])
+                first_segment = segments[0] if segments else {}
+                last_segment = segments[-1] if segments else {}
+                carrier_name = first_segment.get("carrier_name") or first_segment.get("carrier", "Multiple Airlines")
+                
+                flight_options.append(
+                    BookingOption(
+                        booking_type=BookingType.FLIGHT,
+                        provider=carrier_name,
+                        price=Decimal(str(flight.get("total_price", 0))),
+                        currency=flight.get("currency", intent.budget_currency),
+                        title=f"{travel_from} → {travel_to}",
+                        description=f"{carrier_name} • {flight.get('stops', 0)} stop(s)",
+                        affiliate_url="",  # Will be filled by monetization
+                    )
+                )
+            plan.recommended_flights = flight_options if flight_options else None
+        
+        # Add hotel recommendation (for nights staying in this city)
+        is_last_day = i == len(daily_plans) - 1
+        if not is_last_day and gathered and gathered.hotels:
+            # Find a hotel for this city
+            for hotel in gathered.hotels:
+                hotel_city = hotel.get("city_code", "").upper()
+                if hotel_city == _get_city_code(current_city).upper() or not hotel_city:
+                    star_rating = hotel.get("star_rating") or 3
+                    plan.recommended_hotel = BookingOption(
+                        booking_type=BookingType.HOTEL,
+                        provider=hotel.get("chain_code") or hotel.get("name", "Hotel"),
+                        price=Decimal(str(hotel.get("price_per_night", 0))),
+                        price_per_night=Decimal(str(hotel.get("price_per_night", 0))),
+                        currency=hotel.get("currency", intent.budget_currency),
+                        title=hotel.get("name", f"Hotel in {current_city}"),
+                        description=f"{'⭐' * star_rating} • Tonight's stay",
+                        hotel_stars=star_rating,
+                        check_in_date=plan.plan_date,
+                        check_out_date=plan.plan_date + timedelta(days=1),
+                        affiliate_url="",
+                    )
+                    break
+        
+        # Add bookable activities from attractions
+        if gathered and gathered.attractions:
+            bookable = []
+            for attraction in gathered.attractions[:3]:
+                if attraction.get("rating", 0) >= 4.0:
+                    bookable.append(
+                        BookingOption(
+                            booking_type=BookingType.ACTIVITY,
+                            provider="Local Activity",
+                            price=Decimal("0"),
+                            currency=intent.budget_currency,
+                            title=attraction.get("name", "Activity"),
+                            description=f"⭐ {attraction.get('rating', 'N/A')}",
+                            affiliate_url=f"https://www.google.com/search?q={attraction.get('name', '')}+{current_city}+tickets",
+                        )
+                    )
+            plan.bookable_activities = bookable if bookable else None
+        
+        # Add daily tips
+        tips = []
+        if is_travel_day:
+            tips.append(f"🛫 Travel day: {travel_from} → {travel_to}")
+            tips.append("💡 Arrive at airport at least 2 hours before departure")
+        if plan.weather_summary:
+            if plan.weather_summary.precipitation_chance and plan.weather_summary.precipitation_chance > 50:
+                tips.append("☔ High chance of rain - bring umbrella")
+            if plan.weather_summary.temperature_celsius and plan.weather_summary.temperature_celsius < 10:
+                tips.append("🧥 Cold weather - dress warmly")
+        
+        # Add activity-specific tips
+        for activity in plan.activities:
+            if activity.requires_booking:
+                tips.append(f"🎫 Book '{activity.title}' in advance")
+        
+        plan.daily_tips = tips if tips else None
+        
+        enhanced_plans.append(plan)
+        previous_city = current_city
+    
+    return enhanced_plans
+
+
 async def _parse_and_enhance_daily_plans(
     llm_response: str,
     intent: ExtractedIntent,
@@ -1829,6 +1984,13 @@ async def finalization_node(state: AgentState) -> dict:
         daily_plans=daily_plans,
         destination_city=intent.destination_city,
         destination_country=intent.destination_country,
+    )
+    
+    # Enhance daily plans with booking recommendations
+    enriched_daily_plans = await _enhance_daily_plans_with_bookings(
+        daily_plans=enriched_daily_plans,
+        intent=intent,
+        gathered=gathered,
     )
 
     if state.get("progress_callback"):

@@ -1141,6 +1141,7 @@ class AIDailyPlan(BaseModel):
     AI-generated daily plan containing activities for one day.
     
     This groups activities by day for easy calendar rendering.
+    Includes location context and booking recommendations for realistic trip planning.
     """
 
     day_number: int = Field(..., ge=1, description="Day number in the trip (1-indexed)")
@@ -1154,6 +1155,34 @@ class AIDailyPlan(BaseModel):
         None,
         max_length=500,
         description="Brief summary of the day's plan",
+    )
+    
+    # Location context - where you are this day
+    location_city: str | None = Field(
+        None,
+        max_length=100,
+        description="City for this day (e.g., 'Tokyo', 'Osaka')",
+    )
+    location_country: str | None = Field(
+        None,
+        max_length=100,
+        description="Country for this day",
+    )
+    
+    # Travel day indicators
+    is_travel_day: bool = Field(
+        default=False,
+        description="True if this day involves significant travel (city/country change)",
+    )
+    travel_from: str | None = Field(
+        None,
+        max_length=100,
+        description="Origin city if traveling this day",
+    )
+    travel_to: str | None = Field(
+        None,
+        max_length=100,
+        description="Destination city if traveling this day",
     )
 
     @field_validator("plan_date", mode="before")
@@ -1210,6 +1239,33 @@ class AIDailyPlan(BaseModel):
     meal_recommendations: list[str] | None = Field(
         None,
         description="Recommended restaurants/food for the day",
+    )
+    
+    # ========== Daily Booking Recommendations ==========
+    # These are context-aware recommendations for each specific day
+    
+    # Flight recommendations (shown on travel days)
+    recommended_flights: list["BookingOption"] | None = Field(
+        None,
+        description="Flight options if traveling to another city/country this day",
+    )
+    
+    # Hotel recommendation for tonight
+    recommended_hotel: "BookingOption | None" = Field(
+        None,
+        description="Recommended hotel for staying tonight in this city",
+    )
+    
+    # Bookable activities for this day
+    bookable_activities: list["BookingOption"] | None = Field(
+        None,
+        description="Activities/tours that can be booked for this day",
+    )
+    
+    # Daily tips
+    daily_tips: list[str] | None = Field(
+        None,
+        description="Tips specific to this day (e.g., 'Book Skytree tickets in advance')",
     )
 
 
