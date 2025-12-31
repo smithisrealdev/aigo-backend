@@ -388,7 +388,7 @@ class TripPlanningStrategyTest:
                                                 context_result["final_itinerary_includes_context"] = True
                                                 
                                                 print(f"\n   🔍 Verifying context retention:")
-                                                print(f"      Destination: {itinerary.get('destination_city')} {'✅' if 'phuket' in destination.lower() or 'ภูเก็ต' in destination else '❌'}")
+                                                print(f"      Destination: {itinerary.get('destination_city')} {'✅' if 'phuket' in destination or 'ภูเก็ต' in itinerary.get('destination_city', '') else '❌'}")
                                                 print(f"      Budget: {budget} THB {'✅' if budget and 15000 <= float(budget) <= 25000 else '❌'}")
                                                 print(f"      Duration: {duration} days {'✅' if duration == 3 else '❌'}")
                                                 
