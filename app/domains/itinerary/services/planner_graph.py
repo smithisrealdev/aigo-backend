@@ -7,19 +7,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import Enum
 from typing import Annotated, Any, Literal, TypedDict
-from uuid import UUID
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.core.config import settings
 from app.domains.itinerary.schemas import (
@@ -31,14 +29,18 @@ from app.domains.itinerary.schemas import (
     LocationInfo,
     TransitDetail,
     TransitMode,
-    WeatherCondition as WeatherConditionEnum,
     WeatherContext,
+)
+from app.domains.itinerary.schemas import (
+    WeatherCondition as WeatherConditionEnum,
 )
 from app.domains.itinerary.tools import (
     AmadeusTool,
     GoogleMapsTransitTool,
     TravelpayoutsTool,
     WeatherTool,
+    batch_search_images,
+    search_destination_images,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,17 +91,17 @@ class ExtractedIntent(BaseModel):
             for field in list_fields:
                 if field in data and data[field] is None:
                     data[field] = []
-            
+
             # String fields with defaults - convert None to default
             if data.get("pace_preference") is None:
                 data["pace_preference"] = "moderate"
             if data.get("budget_currency") is None:
                 data["budget_currency"] = "THB"
-            
+
             # Int field with default - convert None to default
             if data.get("travelers_count") is None:
                 data["travelers_count"] = 1
-        
+
         return data
 
 
@@ -284,7 +286,7 @@ async def intent_extraction_node(state: AgentState) -> dict:
     llm = get_llm(temperature=0.3)  # Lower temperature for extraction
 
     prompt = ChatPromptTemplate.from_template(INTENT_EXTRACTION_PROMPT)
-    
+
     today = date.today()
     preferences_str = str(state.get("preferences", {})) if state.get("preferences") else "None provided"
 
@@ -447,7 +449,7 @@ async def data_gathering_node(state: AgentState) -> dict:
     if api_errors:
         fallback_count = sum(1 for e in api_errors if e.get("fallback_used"))
         if fallback_count > 0:
-            step_message = f"Data collected! (Some estimates used due to API issues)"
+            step_message = "Data collected! (Some estimates used due to API issues)"
         else:
             step_message = "Data collected with some limitations. Generating itinerary..."
     else:
@@ -466,13 +468,13 @@ async def data_gathering_node(state: AgentState) -> dict:
 async def _search_flights_with_fallback(intent: ExtractedIntent) -> dict:
     """Search for flights using Amadeus with fallback."""
     from app.domains.itinerary.tools.fallback import (
+        classify_error,
         generate_flight_fallback,
         tool_health,
-        classify_error,
     )
-    
+
     tool_name = "amadeus_flights"
-    
+
     # Check if we should skip directly to fallback
     if tool_health.should_use_fallback(tool_name):
         logger.warning(f"Skipping {tool_name} due to repeated failures, using fallback")
@@ -489,7 +491,7 @@ async def _search_flights_with_fallback(intent: ExtractedIntent) -> dict:
             "is_estimated": True,
             "error_message": "Service temporarily unavailable",
         }
-    
+
     try:
         tool = AmadeusTool.flight_search
         result = await tool._arun(
@@ -508,7 +510,7 @@ async def _search_flights_with_fallback(intent: ExtractedIntent) -> dict:
     except Exception as e:
         logger.warning(f"Flight search failed: {e}, using fallback")
         tool_health.record_failure(tool_name, e)
-        
+
         # Generate fallback data
         result = await generate_flight_fallback(
             origin=intent.origin_city[:3].upper() if intent.origin_city else "BKK",
@@ -530,13 +532,13 @@ async def _search_flights_with_fallback(intent: ExtractedIntent) -> dict:
 async def _search_hotels_with_fallback(intent: ExtractedIntent) -> dict:
     """Search for hotels using Amadeus with fallback."""
     from app.domains.itinerary.tools.fallback import (
+        classify_error,
         generate_hotel_fallback,
         tool_health,
-        classify_error,
     )
-    
+
     tool_name = "amadeus_hotels"
-    
+
     # Check if we should skip directly to fallback
     if tool_health.should_use_fallback(tool_name):
         logger.warning(f"Skipping {tool_name} due to repeated failures, using fallback")
@@ -553,7 +555,7 @@ async def _search_hotels_with_fallback(intent: ExtractedIntent) -> dict:
             "is_estimated": True,
             "error_message": "Service temporarily unavailable",
         }
-    
+
     try:
         tool = AmadeusTool.hotel_search
         result = await tool._arun(
@@ -571,7 +573,7 @@ async def _search_hotels_with_fallback(intent: ExtractedIntent) -> dict:
     except Exception as e:
         logger.warning(f"Hotel search failed: {e}, using fallback")
         tool_health.record_failure(tool_name, e)
-        
+
         # Generate fallback data
         result = await generate_hotel_fallback(
             city=intent.destination_city,
@@ -593,13 +595,13 @@ async def _search_hotels_with_fallback(intent: ExtractedIntent) -> dict:
 async def _get_weather_with_fallback(intent: ExtractedIntent) -> dict:
     """Get weather forecast with fallback."""
     from app.domains.itinerary.tools.fallback import (
+        classify_error,
         generate_weather_fallback,
         tool_health,
-        classify_error,
     )
-    
+
     tool_name = "weather_api"
-    
+
     # Check if we should skip directly to fallback
     if tool_health.should_use_fallback(tool_name):
         logger.warning(f"Skipping {tool_name} due to repeated failures, using fallback")
@@ -614,7 +616,7 @@ async def _get_weather_with_fallback(intent: ExtractedIntent) -> dict:
             "is_estimated": True,
             "error_message": "Service temporarily unavailable",
         }
-    
+
     try:
         tool = WeatherTool.forecast
         result = await tool._arun(
@@ -631,7 +633,7 @@ async def _get_weather_with_fallback(intent: ExtractedIntent) -> dict:
     except Exception as e:
         logger.warning(f"Weather fetch failed: {e}, using fallback")
         tool_health.record_failure(tool_name, e)
-        
+
         # Generate fallback data
         result = await generate_weather_fallback(
             city=intent.destination_city,
@@ -651,13 +653,13 @@ async def _get_weather_with_fallback(intent: ExtractedIntent) -> dict:
 async def _search_attractions_with_fallback(intent: ExtractedIntent) -> dict:
     """Search for attractions using Google Maps with fallback."""
     from app.domains.itinerary.tools.fallback import (
+        classify_error,
         generate_attractions_fallback,
         tool_health,
-        classify_error,
     )
-    
+
     tool_name = "google_places"
-    
+
     # Check if we should skip directly to fallback
     if tool_health.should_use_fallback(tool_name):
         logger.warning(f"Skipping {tool_name} due to repeated failures, using fallback")
@@ -673,7 +675,7 @@ async def _search_attractions_with_fallback(intent: ExtractedIntent) -> dict:
             "is_estimated": True,
             "error_message": "Service temporarily unavailable",
         }
-    
+
     try:
         tool = GoogleMapsTransitTool.place_search
 
@@ -707,11 +709,11 @@ async def _search_attractions_with_fallback(intent: ExtractedIntent) -> dict:
         else:
             # All queries failed, use fallback
             raise Exception("All attraction queries failed")
-            
+
     except Exception as e:
         logger.warning(f"Attractions search failed: {e}, using fallback")
         tool_health.record_failure(tool_name, e)
-        
+
         # Generate fallback data
         result = await generate_attractions_fallback(
             city=intent.destination_city,
@@ -1376,6 +1378,126 @@ async def monetization_node(state: AgentState) -> dict:
     }
 
 
+async def _enrich_with_images(
+    daily_plans: list[AIDailyPlan],
+    destination_city: str,
+    destination_country: str,
+) -> tuple[list[AIDailyPlan], list[dict], str | None]:
+    """
+    Enrich itinerary with images for all locations.
+
+    Fetches images for:
+    - Main destination (cover image)
+    - Each activity location
+
+    Args:
+        daily_plans: List of daily plans to enrich
+        destination_city: City name for destination images
+        destination_country: Country name for destination images
+
+    Returns:
+        Tuple of (enriched_daily_plans, destination_images, cover_image_url)
+    """
+    from app.domains.itinerary.schemas import LocationImage
+
+    logger.info(f"Enriching itinerary with images for {destination_city}")
+
+    destination_images: list[dict] = []
+    cover_image_url: str | None = None
+
+    try:
+        # 1. Get destination images for cover
+        dest_images = await search_destination_images(
+            city=destination_city,
+            country=destination_country,
+            num_images=5,
+        )
+
+        if dest_images.images:
+            cover_image_url = dest_images.images[0].url
+            destination_images = [
+                {
+                    "url": img.url,
+                    "thumbnail_url": img.thumbnail_url,
+                    "width": img.width,
+                    "height": img.height,
+                    "source_url": img.source_url,
+                    "source_domain": img.source_domain,
+                    "title": img.title,
+                }
+                for img in dest_images.images
+            ]
+
+        # 2. Collect all location queries
+        location_queries: list[str] = []
+        location_map: dict[str, tuple[int, int]] = {}  # query -> (day_idx, activity_idx)
+
+        for day_idx, day in enumerate(daily_plans):
+            for act_idx, activity in enumerate(day.activities):
+                location_name = activity.location.name if activity.location else activity.title
+                if location_name:
+                    query = f"{location_name} {destination_city}"
+                    location_queries.append(query)
+                    location_map[query] = (day_idx, act_idx)
+
+        # 3. Batch search for all locations
+        if location_queries:
+            image_results = await batch_search_images(
+                queries=location_queries,
+                num_images_per_query=2,
+                max_concurrent=5,
+            )
+
+            # 4. Assign images to activities
+            for query, result in image_results.items():
+                if query in location_map and result.images:
+                    day_idx, act_idx = location_map[query]
+                    activity = daily_plans[day_idx].activities[act_idx]
+
+                    # Set hero image
+                    activity.hero_image_url = result.images[0].url
+
+                    # Set location images
+                    if activity.location:
+                        activity.location.primary_image_url = result.images[0].url
+                        activity.location.primary_thumbnail_url = result.images[0].thumbnail_url
+                        activity.location.images = [
+                            LocationImage(
+                                url=img.url,
+                                thumbnail_url=img.thumbnail_url,
+                                width=img.width,
+                                height=img.height,
+                                source_url=img.source_url,
+                                source_domain=img.source_domain,
+                                title=img.title,
+                            )
+                            for img in result.images
+                        ]
+
+                    # Set activity images
+                    activity.activity_images = [
+                        LocationImage(
+                            url=img.url,
+                            thumbnail_url=img.thumbnail_url,
+                            width=img.width,
+                            height=img.height,
+                            source_url=img.source_url,
+                            source_domain=img.source_domain,
+                            title=img.title,
+                        )
+                        for img in result.images
+                    ]
+
+        logger.info(
+            f"Image enrichment complete: {len(location_queries)} locations processed"
+        )
+
+    except Exception as e:
+        logger.warning(f"Image enrichment failed: {e}, continuing without images")
+
+    return daily_plans, destination_images, cover_image_url
+
+
 async def finalization_node(state: AgentState) -> dict:
     """
     Finalize the itinerary and create the complete output.
@@ -1393,13 +1515,27 @@ async def finalization_node(state: AgentState) -> dict:
     if state.get("progress_callback"):
         await state["progress_callback"](
             step=PlannerStep.FINALIZATION,
+            progress=96,
+            message="📷 Fetching images for your itinerary...",
+        )
+
+    # Enrich with images
+    enriched_daily_plans, destination_images, cover_image_url = await _enrich_with_images(
+        daily_plans=daily_plans,
+        destination_city=intent.destination_city,
+        destination_country=intent.destination_country,
+    )
+
+    if state.get("progress_callback"):
+        await state["progress_callback"](
+            step=PlannerStep.FINALIZATION,
             progress=98,
             message="✨ Putting the finishing touches...",
         )
 
     # Calculate total cost
     activities_cost = sum(
-        plan.total_cost for plan in daily_plans
+        plan.total_cost for plan in enriched_daily_plans
     )
 
     # Get weather summary
@@ -1414,6 +1550,22 @@ async def finalization_node(state: AgentState) -> dict:
     hotel_options = [b for b in booking_options if b.booking_type == BookingType.HOTEL]
     activity_bookings = [b for b in booking_options if b.booking_type not in [BookingType.FLIGHT, BookingType.HOTEL]]
 
+    # Convert destination_images to LocationImage objects
+    from app.domains.itinerary.schemas import LocationImage
+
+    destination_images_objects = [
+        LocationImage(**img) for img in destination_images
+    ] if destination_images else None
+
+    # Determine sources used
+    sources_used = ["Amadeus", "Google Maps", "OpenWeatherMap", "Travelpayouts"]
+    if destination_images or any(
+        getattr(act, "activity_images", None)
+        for plan in enriched_daily_plans
+        for act in plan.activities
+    ):
+        sources_used.append("Google Image Search")
+
     final_itinerary = AIFullItinerary(
         title=f"{intent.duration_days}-Day {intent.destination_city} Adventure",
         destination=f"{intent.destination_city}, {intent.destination_country}",
@@ -1424,7 +1576,9 @@ async def finalization_node(state: AgentState) -> dict:
         duration_days=intent.duration_days,
         traveler_count=intent.travelers_count,
         trip_type=intent.trip_type,
-        daily_plans=daily_plans,
+        daily_plans=enriched_daily_plans,
+        destination_images=destination_images_objects,
+        cover_image_url=cover_image_url,
         flight_options=flight_options if flight_options else None,
         hotel_options=hotel_options if hotel_options else None,
         activity_bookings=activity_bookings if activity_bookings else None,
@@ -1439,8 +1593,8 @@ async def finalization_node(state: AgentState) -> dict:
         currency=intent.budget_currency,
         weather_summary=weather_summary,
         packing_suggestions=packing,
-        generated_at=datetime.now(timezone.utc),
-        sources_used=["Amadeus", "Google Maps", "OpenWeatherMap", "Travelpayouts"],
+        generated_at=datetime.now(UTC),
+        sources_used=sources_used,
     )
 
     return {
