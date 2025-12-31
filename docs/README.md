@@ -32,6 +32,18 @@ Complete guide for running comprehensive tests:
 
 **For:** Testing and validation
 
+#### [TRIP_PLANNING_STRATEGY_TEST.md](TRIP_PLANNING_STRATEGY_TEST.md) - **NEW** 🎉
+**Trip Planning Strategy Test**
+
+Focused test for trip planning feature validation:
+- MCP tools integration status check
+- Itinerary completeness validation
+- Tool availability verification
+- Automated test script with detailed reporting
+- Troubleshooting guide
+
+**For:** Feature validation and integration testing
+
 ### Weather API Documentation
 
 ## Documentation Files
@@ -113,6 +125,9 @@ python scripts/test_full_itinerary_mcp_tools.py
 python scripts/test_conversation_loop.py
 python scripts/test_itinerary_generate_weather.py
 
+# Run trip planning strategy test (NEW)
+python scripts/test_trip_planning_strategy.py
+
 # Quick test mode
 python scripts/run_all_tests.py --quick
 ```
@@ -180,6 +195,7 @@ See [TESTING_GUIDE.md](TESTING_GUIDE.md) for detailed instructions.
 - `scripts/test_full_itinerary_mcp_tools.py` - Full itinerary generation and MCP tools test
 - `scripts/test_conversation_loop.py` - Conversation loop and context retention test
 - `scripts/test_itinerary_generate_weather.py` - Weather integration test
+- `scripts/test_trip_planning_strategy.py` - **NEW** Trip planning strategy and tools validation test
 
 ### Weather API Testing
 - `scripts/test_weather_api.py` - Direct weather API test
