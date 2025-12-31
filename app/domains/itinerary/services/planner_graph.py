@@ -1033,26 +1033,63 @@ async def _enhance_daily_plans_with_bookings(
         
         # Add hotel recommendation (for nights staying in this city)
         is_last_day = i == len(daily_plans) - 1
-        if not is_last_day and gathered and gathered.hotels:
-            # Find a hotel for this city
-            for hotel in gathered.hotels:
-                hotel_city = hotel.get("city_code", "").upper()
-                if hotel_city == _get_city_code(current_city).upper() or not hotel_city:
-                    star_rating = hotel.get("star_rating") or 3
-                    plan.recommended_hotel = BookingOption(
-                        booking_type=BookingType.HOTEL,
-                        provider=hotel.get("chain_code") or hotel.get("name", "Hotel"),
-                        price=Decimal(str(hotel.get("price_per_night", 0))),
-                        price_per_night=Decimal(str(hotel.get("price_per_night", 0))),
-                        currency=hotel.get("currency", intent.budget_currency),
-                        title=hotel.get("name", f"Hotel in {current_city}"),
-                        description=f"{'⭐' * star_rating} • Tonight's stay",
-                        hotel_stars=star_rating,
-                        check_in_date=plan.plan_date,
-                        check_out_date=plan.plan_date + timedelta(days=1),
-                        affiliate_url="",
-                    )
-                    break
+        if not is_last_day:
+            hotel_added = False
+            
+            # Try to find a hotel from gathered data
+            if gathered and gathered.hotels:
+                for hotel in gathered.hotels:
+                    hotel_city = hotel.get("city_code", "").upper()
+                    if hotel_city == _get_city_code(current_city).upper() or not hotel_city:
+                        star_rating = hotel.get("star_rating") or 3
+                        hotel_name = hotel.get("name", f"Hotel in {current_city}")
+                        check_out = plan.plan_date + timedelta(days=1)
+                        
+                        # Generate booking.com affiliate URL for hotel search
+                        affiliate_url = (
+                            f"https://www.booking.com/searchresults.html"
+                            f"?ss={current_city}"
+                            f"&checkin={plan.plan_date}"
+                            f"&checkout={check_out}"
+                        )
+                        
+                        plan.recommended_hotel = BookingOption(
+                            booking_type=BookingType.HOTEL,
+                            provider=hotel.get("chain_code") or hotel_name,
+                            price=Decimal(str(hotel.get("price_per_night", 0))),
+                            price_per_night=Decimal(str(hotel.get("price_per_night", 0))),
+                            currency=hotel.get("currency", intent.budget_currency),
+                            title=hotel_name,
+                            description=f"{'⭐' * star_rating} • Tonight's stay",
+                            hotel_stars=star_rating,
+                            check_in_date=plan.plan_date,
+                            check_out_date=check_out,
+                            affiliate_url=affiliate_url,
+                        )
+                        hotel_added = True
+                        break
+            
+            # Fallback: Create a placeholder hotel recommendation if API failed
+            if not hotel_added:
+                # Estimate nightly budget based on total budget and trip duration
+                nights = len(daily_plans) - 1 if len(daily_plans) > 1 else 1
+                total_budget = intent.budget_amount or 50000
+                # Hotels typically ~25-30% of travel budget
+                estimated_nightly = Decimal(str(int(total_budget * 0.25 / nights)))
+                
+                plan.recommended_hotel = BookingOption(
+                    booking_type=BookingType.HOTEL,
+                    provider="Search Hotels",
+                    price=estimated_nightly,
+                    price_per_night=estimated_nightly,
+                    currency=intent.budget_currency,
+                    title=f"Hotels in {current_city}",
+                    description="⭐⭐⭐⭐ • Click to search available hotels",
+                    hotel_stars=4,
+                    check_in_date=plan.plan_date,
+                    check_out_date=plan.plan_date + timedelta(days=1),
+                    affiliate_url=f"https://www.booking.com/searchresults.html?ss={current_city}&checkin={plan.plan_date}&checkout={plan.plan_date + timedelta(days=1)}",
+                )
         
         # Add bookable activities from attractions
         if gathered and gathered.attractions:
